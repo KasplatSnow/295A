@@ -1,0 +1,11 @@
+@import "../node_modules/reset-css/reset.css";
+
+html {
+  font-size: 62.5%;
+  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
+    monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
