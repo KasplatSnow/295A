@@ -127,7 +127,7 @@ export default function Dashboard() {
 
         <div className="lg:col-span-5 space-y-6">
           <div>
-            <h2 className="text-lg font-semibold mb-4">Active Alerts</h2>
+            <h2 className="text-lg font-semibold mb-4">Recent Alerts</h2>
             <div className="space-y-3">
               {alerts.map((alert) => (
                 <AlertCard

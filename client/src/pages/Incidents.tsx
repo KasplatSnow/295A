@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { Search, Eye } from "lucide-react";
 
 interface Incident {
@@ -46,18 +45,11 @@ export default function Incidents() {
     return matchesSearch && matchesType && matchesEntity && matchesZone;
   });
 
-  const getTypeBadge = (type: string) => {
-    if (type === "Fire") return <Badge variant="destructive">Fire</Badge>;
-    if (type === "Intrusion") return <Badge className="bg-orange-600">Intrusion</Badge>;
-    if (type === "Violence") return <Badge className="bg-red-700">Violence</Badge>;
-    return <Badge variant="secondary">{type}</Badge>;
-  };
-
-  const getEntityBadge = (entity: string) => {
+  const getEntityText = (entity: string) => {
     if (entity.includes("Unknown")) {
-      return <Badge variant="outline" className="text-orange-600 border-orange-600">{entity}</Badge>;
+      return <span className="text-orange-600 font-medium">{entity}</span>;
     }
-    return <span className="text-sm">{entity}</span>;
+    return <span>{entity}</span>;
   };
 
   return (
@@ -132,9 +124,9 @@ export default function Incidents() {
             {filteredIncidents.map((incident) => (
               <TableRow key={incident.id} className="cursor-pointer hover-elevate" onClick={() => setLocation(`/incidents/${incident.id}`)}>
                 <TableCell className="font-medium" data-testid={`text-incident-${incident.id}`}>#{incident.id}</TableCell>
-                <TableCell>{getTypeBadge(incident.type)}</TableCell>
+                <TableCell>{incident.type}</TableCell>
                 <TableCell>{incident.location}</TableCell>
-                <TableCell>{getEntityBadge(incident.entity)}</TableCell>
+                <TableCell>{getEntityText(incident.entity)}</TableCell>
                 <TableCell>{incident.zone}</TableCell>
                 <TableCell>{incident.confidence}%</TableCell>
                 <TableCell className="text-muted-foreground">{incident.timestamp}</TableCell>
