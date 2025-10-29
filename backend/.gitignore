@@ -1,0 +1,53 @@
+# === Python / Django ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.log
+*.pot
+*.mo
+*.pyproj
+*.egg-info/
+*.migrations/
+db.sqlite3
+*.db
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+
+# Django static and media (collected or generated)
+staticfiles/
+static/
+media/
+build/
+dist/
+assets/
+
+# IDE and tooling
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+
+# Tests / coverage
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+pytest_cache/
+__snapshots__/
+
+# OS junk
+.DS_Store
+Thumbs.db
