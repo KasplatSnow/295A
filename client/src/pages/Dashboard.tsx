@@ -2,10 +2,13 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import CameraFeed from "@/components/CameraFeed";
 import AlertCard from "@/components/AlertCard";
 import StatsCard from "@/components/StatsCard";
-import { Maximize2, Pause, Play, Activity, Clock, TrendingUp } from "lucide-react";
+import { Maximize2, Pause, Play, Activity, Clock, TrendingUp, User, Dog, Car } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 
 import frontDoorImg from '@assets/generated_images/Front_door_camera_view_eee34996.png';
@@ -32,6 +35,7 @@ const latencyData = [
 export default function Dashboard() {
   const [, setLocation] = useLocation();
   const [isPaused, setIsPaused] = useState(false);
+  const [zoneFilter, setZoneFilter] = useState("all");
 
   const cameras = [
     { name: "Front Door", location: "Entrance", status: "active" as const, imageUrl: frontDoorImg },
@@ -46,8 +50,46 @@ export default function Dashboard() {
     { id: 3, type: "violence" as const, location: "Garage", time: "11:45 PM", entity: "Jason P. (Neighbor)", confidence: 85 },
   ];
 
+  const knownEntities = [
+    { name: "Dev", type: "person" as const },
+    { name: "Harsh", type: "person" as const },
+    { name: "Cameron", type: "person" as const },
+    { name: "Bella", type: "pet" as const },
+  ];
+
+  const watchlist = [
+    { name: "Unknown Male 01", type: "person" as const },
+    { name: "Gray SUV", type: "vehicle" as const },
+  ];
+
+  const communityActivity = [
+    { time: "10 min ago", action: "Jason added PorchCam to Shared zone" },
+    { time: "1 hour ago", action: "Nina approved Neighborhood Watch invite" },
+    { time: "2 hours ago", action: "Cameron shared Street Cam with All Members" },
+  ];
+
+  const getEntityIcon = (type: string) => {
+    if (type === "person") return <User className="w-3 h-3" />;
+    if (type === "pet") return <Dog className="w-3 h-3" />;
+    return <Car className="w-3 h-3" />;
+  };
+
   return (
     <div className="p-6 space-y-6">
+      <div className="flex gap-3 flex-wrap">
+        <Select value={zoneFilter} onValueChange={setZoneFilter}>
+          <SelectTrigger className="w-[180px]" data-testid="select-zone-filter">
+            <SelectValue placeholder="Zone" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Zones</SelectItem>
+            <SelectItem value="home">Home</SelectItem>
+            <SelectItem value="street">Street</SelectItem>
+            <SelectItem value="shared">Shared</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <div className="lg:col-span-4 space-y-4">
           <div>
@@ -135,6 +177,47 @@ export default function Dashboard() {
         </div>
 
         <div className="lg:col-span-3 space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold mb-4">Entities</h2>
+            <Card className="p-4">
+              <h3 className="text-sm font-semibold mb-3">Known Entities</h3>
+              <div className="flex flex-wrap gap-2">
+                {knownEntities.map((entity, idx) => (
+                  <Badge key={idx} variant="secondary" className="gap-1" data-testid={`chip-entity-${idx}`}>
+                    {getEntityIcon(entity.type)}
+                    {entity.name}
+                  </Badge>
+                ))}
+              </div>
+            </Card>
+
+            <Card className="p-4 mt-3">
+              <h3 className="text-sm font-semibold mb-3">Watchlist</h3>
+              <div className="flex flex-wrap gap-2">
+                {watchlist.map((entity, idx) => (
+                  <Badge key={idx} variant="destructive" className="gap-1" data-testid={`chip-watchlist-${idx}`}>
+                    {getEntityIcon(entity.type)}
+                    {entity.name}
+                  </Badge>
+                ))}
+              </div>
+            </Card>
+          </div>
+
+          <div>
+            <h2 className="text-lg font-semibold mb-4">Community Activity</h2>
+            <Card className="p-4">
+              <div className="space-y-3">
+                {communityActivity.map((activity, idx) => (
+                  <div key={idx} className="text-sm">
+                    <p className="text-muted-foreground text-xs mb-1">{activity.time}</p>
+                    <p>{activity.action}</p>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+
           <div>
             <h2 className="text-lg font-semibold mb-4">System Health</h2>
             

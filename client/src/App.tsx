@@ -6,7 +6,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
+import Incidents from "@/pages/Incidents";
 import IncidentDetails from "@/pages/IncidentDetails";
+import Entities from "@/pages/Entities";
+import Community from "@/pages/Community";
 import Reports from "@/pages/Reports";
 import Cameras from "@/pages/Cameras";
 import Settings from "@/pages/Settings";
@@ -30,9 +33,24 @@ function Router() {
           <Dashboard />
         </AuthenticatedLayout>
       </Route>
+      <Route path="/incidents">
+        <AuthenticatedLayout>
+          <Incidents />
+        </AuthenticatedLayout>
+      </Route>
       <Route path="/incidents/:id">
         <AuthenticatedLayout>
           <IncidentDetails />
+        </AuthenticatedLayout>
+      </Route>
+      <Route path="/entities">
+        <AuthenticatedLayout>
+          <Entities />
+        </AuthenticatedLayout>
+      </Route>
+      <Route path="/community">
+        <AuthenticatedLayout>
+          <Community />
         </AuthenticatedLayout>
       </Route>
       <Route path="/reports">

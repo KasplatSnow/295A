@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Shield, LayoutDashboard, Video, FileText, Settings as SettingsIcon } from "lucide-react";
+import { Shield, LayoutDashboard, Video, FileText, Settings as SettingsIcon, AlertTriangle, Users, User } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 export default function NavBar() {
@@ -8,6 +8,9 @@ export default function NavBar() {
   const navItems = [
     { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { path: "/cameras", label: "Cameras", icon: Video },
+    { path: "/incidents", label: "Incidents", icon: AlertTriangle },
+    { path: "/entities", label: "Entities", icon: User },
+    { path: "/community", label: "Community", icon: Users },
     { path: "/reports", label: "Reports", icon: FileText },
     { path: "/settings", label: "Settings", icon: SettingsIcon },
   ];
