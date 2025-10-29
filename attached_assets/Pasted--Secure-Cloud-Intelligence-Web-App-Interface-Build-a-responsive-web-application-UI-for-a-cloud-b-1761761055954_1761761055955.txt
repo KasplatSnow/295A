@@ -1,0 +1,190 @@
+“Secure Cloud Intelligence — Web App Interface”
+
+Build a responsive web application UI for a cloud-based security system called “Secure Cloud Intelligence.” The system provides real-time anomaly detection from live video streams. The UI should look clean, modern, and professional with a light color palette (white background, blue and gray accents). Typography should be sans-serif (Roboto or Inter). Use subtle shadows, rounded corners, and clear icons. The layout should feel like a real product dashboard, not a marketing site.
+
+Pages to Generate
+1️⃣ Login Page
+
+Title: “Secure Cloud Intelligence”
+
+Subtitle: “Smart, Context-Aware Home Security”
+
+Centered login card with:
+
+Email field
+
+Password field
+
+Checkbox: “Remember me”
+
+Primary button: “Login”
+
+Secondary links: “Register” and “Forgot password?”
+
+Footer text: “All connections are encrypted and private.”
+
+Design cues: Minimal, centered form, subtle lock or shield icon near title.
+
+2️⃣ Dashboard Page
+
+Top navigation bar with logo/title on the left, menu tabs in the center:
+Dashboard | Cameras | Reports | Settings
+Profile avatar + username on the right.
+
+Main content divided into 3 columns:
+
+Left Column — Live Feeds
+
+4 camera thumbnails labeled Front Door, Living Room, Garage, Backyard
+
+Buttons below: “View Fullscreen” and “Pause Stream”
+
+Middle Column — Alerts and Summary
+
+Section: Active Alerts
+
+🔥 Fire detected — Kitchen at 2:31 PM
+
+🚶 Intrusion detected — Backyard at 1:12 AM
+
+⚠️ Violence detected — Garage at 11:45 PM
+
+Section: Incident Summary
+
+Stats cards: Today | Week | Month
+
+Pie chart: Anomaly Type Breakdown
+
+Right Column — System Health
+
+Small line or bar chart for Latency, Uptime, Frames processed
+
+Numeric summary:
+
+Detection Accuracy: 91%
+
+System Uptime: 99.2%
+
+3️⃣ Incident Details Page
+
+Header: “Incident #203 — Fire Detected”
+
+Badge: Active (green) / Resolved (gray)
+
+Timestamp: Friday, 2:30 PM
+
+Main content split horizontally:
+
+Left: Video thumbnail or snapshot with small playback controls.
+
+Right: Incident info table:
+
+Type: Fire
+
+Location: Kitchen
+
+Confidence: 92%
+
+Entities Detected: None
+
+Buttons: “Acknowledge” (Primary), “Export Report” (Secondary)
+
+Bottom timeline: chronological logs of detection and notifications
+
+4️⃣ Reports Page
+
+Page header: “Analytics & Reports”
+
+Filters section at the top:
+
+Date range picker
+
+Dropdown: Incident type (Fire, Intrusion, Violence, Crash, All)
+
+Buttons: “Download CSV” | “Export PDF”
+
+Charts section below:
+
+Bar chart — Incidents per Day
+
+Pie chart — Incident Breakdown by Type
+
+Line chart — Response Time Trends
+
+Insight box below charts:
+
+“Peak alerts occur between 6 PM and 9 PM. Fire alerts decreased 14% this week.”
+
+5️⃣ Camera Management Page
+
+Header: “Camera Management”
+
+Table layout:
+
+Camera Name	Location	Status	Added On	Actions
+FrontDoorCam	Entrance	🟢 Active	Oct 21	Edit/Delete
+GarageCam	Garage	🟢 Active	Oct 20	Edit/Delete
+BackyardCam	Backyard	🔴 Offline	Oct 19	Edit/Delete
+
+Button: “+ Add Camera” (opens modal)
+
+Modal form:
+
+Camera Name
+
+Stream URL
+
+Zone Tag
+
+Buttons: “Test Connection”, “Save”
+
+6️⃣ Settings Page
+
+Tabs within settings: Profile, Notifications, System Preferences
+
+Profile:
+
+Fields: Full name, email, change password
+
+Button: “Save Changes”
+
+Notifications:
+
+Toggle switches for Email, Push, and SMS alerts
+
+System Preferences:
+
+Dropdown: Alert Sensitivity (Low, Medium, High)
+
+Dropdown: Data Retention (30 / 60 / 90 days)
+
+Toggle: “Enable Audio Detection”
+
+General Design Guidelines
+
+Theme: Light mode
+
+Accent color: Blue (#2563EB)
+
+Secondary color: Gray (#6B7280)
+
+Highlight color: Orange/Red for critical alerts
+
+Icons: Use simple vector icons (camera, chart, alert, settings, profile)
+
+Spacing: Ample white space; padding 20–32px between sections
+
+Charts: Simple, readable — line/bar/pie with clear legends
+
+Typography:
+
+Title font size: 22–24px bold
+
+Body: 14–16px regular
+
+Page Flow
+Login → Dashboard → Incident Details → Reports → Cameras → Settings
+
+Output Expectation
+
+The result should be a responsive, high-fidelity web UI design mockup (or webpage layout) that looks like a real working cloud dashboard for security monitoring — not a static poster. Each page should be generated in a consistent color scheme and component style.
