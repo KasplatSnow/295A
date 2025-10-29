@@ -1,0 +1,208 @@
+“Secure Cloud Intelligence — Community & Entity-Aware Web App”
+
+Goal: Build a responsive web application UI for a community-based smart surveillance system called “Secure Cloud Intelligence.”
+Style: Light mode, professional, clean. White background, blue accents (#2563EB), neutral grays (#6B7280/#E5E7EB), success (#10B981), warning (#F59E0B), critical (#EF4444). Rounded 12px corners, soft shadows, generous spacing (24–32px). Typeface: Inter or Roboto.
+
+Global Navigation (top): Logo/Title (left) → Tabs: Dashboard, Cameras, Incidents, Entities, Community, Reports, Settings → Profile avatar (right).
+Global UI elements: Breadcrumbs, search field (top right on most pages), sticky alert bell, consistent primary button style, chips, badges, and tables.
+Do not reference any specific cloud vendor.
+
+1) Login (Auth)
+
+Centered card with logo, title “Secure Cloud Intelligence”, subtitle “Smart, context-aware neighborhood security.”
+
+Inputs: Email, Password, checkbox Remember me.
+
+Primary button: Login. Links: Register, Forgot password?
+
+Footer microcopy: “All connections are private and encrypted.”
+
+2) Dashboard (Home)
+
+Three-column adaptive layout.
+
+Header Row:
+
+Quick filters: Date Range, Cameras (All), Zone (Home / Street / Shared), Entity (All / Known / Unknown).
+
+KPI cards (4): Incidents Today, Active Alerts, Avg. Detection Latency, Uptime.
+
+Left Column – Live Feeds
+
+4 camera tiles: Front Door, Living Room, Garage, Backyard. Each tile shows a thumbnail, status dot, “Live” badge, quick actions (Fullscreen, Pause, Snapshot).
+
+Middle Column – Active Alerts & Recent Incidents
+
+Active Alerts list (real values, not lorem):
+
+🔥 Fire detected — Kitchen — 2:31 PM — Confidence 0.92 — Unknown entity
+
+🚶 Intrusion detected — Backyard — 1:12 AM — Confidence 0.88 — Unknown entity
+
+⚠️ Altercation detected — Garage — 11:45 PM — Entity: Jason P. (Neighbor)
+
+Each alert card has Acknowledge, Open Incident, Mute 1h.
+
+Right Column – Entity & Community Snapshot
+
+Known Entities (chips with avatars): Dev, Harsh, Cameron, Bella (pet).
+
+Watchlist chips (danger style): Unknown Male 01, Unknown Vehicle Gray SUV.
+
+Community Activity mini-feed: “Jason added PorchCam to Shared zone”, “Nina approved Neighborhood Watch invite”.
+
+Small chart: Incidents by type (Pie), Last 7 days (Bar).
+
+3) Incidents (List)
+
+Filters: Date Range, Type (Fire/Intrusion/Violence/Crash/Other), Status (Open/Resolved), Entity (Known/Unknown/Watchlist), Camera, Zone.
+
+Table columns: Incident ID, Type, Location, Entity, Confidence, Time, Status, Actions.
+
+Row example: #203 | Fire | Kitchen | Unknown | 0.92 | 2:31 PM | Open | [Open] [Acknowledge].
+
+4) Incident Details
+
+Page title: Incident #203 — Fire Detected | Badge: Open.
+
+Top meta bar: Time: Fri 2:30 PM, Camera: KitchenCam, Zone: Home, Confidence: 92%.
+
+Left: Snapshot/video with controls (Play, 10s back, Fullscreen).
+
+Right:
+
+Classification: Fire (primary), Smoke (secondary)
+
+Entities: Unknown, suggested match: Dev? 41% (button: Confirm or Dismiss)
+
+Actions: Acknowledge, Escalate to Community, Export PDF, Resolve.
+
+Timeline: detection → verification → alert sent → user acknowledgement.
+
+Side panel: Similar incidents (links), camera health.
+
+5) Entities (Directory)
+
+Purpose: Add/remove/manage entities (people, pets, vehicles) for personalized alerts and community sharing.
+
+Top controls: Search field, filters (Type: Person/Pet/Vehicle; Group: Household/Neighbor/Watchlist), Add Entity button.
+
+Grid/List of entity cards (avatar or placeholder):
+
+Dev (Person) — tags: Household, Owner
+
+Harsh (Person) — Household
+
+Cameron (Person) — Household
+
+Bella (Pet) — Dog, Household
+
+Unknown Male 01 (Person) — Watchlist
+
+Gray SUV (Vehicle) — Watchlist
+
+Each card: avatar, Recognized on (last seen), Associated Cameras, Zones, buttons View, Edit, Remove.
+
+Add Entity (Modal / Page):
+
+Type: Person | Pet | Vehicle
+
+Basic Info: Display Name, Notes (optional)
+
+Reference Media: Upload 3–5 images (drag & drop); tip text: “Use clear, frontal photos in varied lighting.”
+
+Groups & Zones: Household / Neighbor / Watchlist; Zone access chips (Home, Street, Shared).
+
+Privacy & Consent: checkbox “I have obtained consent to store and use this entity’s images for recognition.”
+
+Buttons: Save, Cancel (Validate required fields. Show non-destructive Remove pattern.)
+
+Edit Entity includes:
+
+Replace/add images, toggle watchlist, change zones, view Recent Sightings table (time, camera, confidence), and Delete Entity (danger).
+
+6) Community (Sharing & Access)
+
+Tabs: Members, Shared Cameras, Zones & Access, Invitations, Audit Log.
+
+Members:
+
+Table: Name, Role (Owner/Admin/Member/Viewer), Joined, Actions.
+
+Buttons: Invite Member (modal with email + role), Remove (with confirm).
+
+Shared Cameras:
+
+Table: Camera, Shared With (Group/Member), Zone, Status, Actions.
+
+Button: Share Camera → choose camera(s), select recipients (group: Neighborhood Watch or individuals), choose Zone (Shared/Street only), privacy note.
+
+Zones & Access:
+
+Cards: Home (Private), Street (Shared), Shared (Community) with descriptions and policy toggles.
+
+Policy toggles: “Blur faces for non-household”, “Share only incident clips”, “Disable audio for shared views”.
+
+Invitations: pending invites, resend, revoke.
+
+Audit Log: time-ordered list: “2:15 PM — Cameron granted Viewer access to PorchCam (Shared)”.
+
+7) Cameras
+
+Table: Camera Name, Location, Status (Active/Offline), Zone, Last Seen, Actions (Edit, Share, Delete).
+
+Button: + Add Camera → Name, Stream URL (masked), Location, Zone, Test Connection, Save.
+
+8) Reports (Analytics)
+
+Filters: Date range, Cameras, Zones, Entity type, Incident type.
+
+Charts:
+
+Bar — Incidents per day
+
+Pie — Breakdown by anomaly type
+
+Line — Response time trend
+
+Text Insight: “Most alerts occur 6–9 PM. Fire incidents down 14% WoW. Unknown entities concentrated near Street zone.”
+
+Export buttons: Download CSV, Export PDF.
+
+9) Settings
+
+Tabs: Profile, Notifications, Privacy & Retention, System Preferences.
+
+Profile: Name, Email, Change password.
+
+Notifications: toggles for Email, Push, SMS; Escalation Rules (e.g., “If unknown person seen at night in Backyard → Send SMS”).
+
+Privacy & Retention: data retention (30/60/90 days), blur faces for shared video, consent statements, download my data.
+
+System Preferences: Alert Sensitivity (Low/Medium/High), Timezone, 12/24h time.
+
+Empty States & Microcopy
+
+Entities empty state: “No entities yet. Add family members, pets, or vehicles for smarter alerts.”
+
+Community empty state: “No members. Invite neighbors to collaborate on safety.”
+
+Cameras empty: “Connect your first camera to start monitoring.”
+
+Component Details (for generators that support it)
+
+Buttons: Primary (#2563EB), Secondary (outline), Destructive (#EF4444), subtle hover shadows.
+
+Chips: Pill 24px height; variants: Known (blue), Watchlist (red), Household (green), Neighbor (gray).
+
+Tables: Sticky header, sortable columns, zebra rows, 14px text.
+
+Cards: 12px radius, 1px border #E5E7EB, shadow-sm.
+
+Modals: width 640–720px, esc close, footer buttons aligned right.
+
+Page Flow
+Login → Dashboard → (Incidents | Entities | Community | Cameras | Reports | Settings)
+Entities → Add/Edit Entity → See Recent Sightings
+Community → Share Cameras → Zones & Access → Audit Log
+Incidents → Open Incident → Acknowledge/Escalate/Resolve → Export PDF
