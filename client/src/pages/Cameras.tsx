@@ -3,14 +3,17 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Edit, Trash2, Wifi, WifiOff } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Plus, Edit, Trash2, Wifi, WifiOff, Share2 } from "lucide-react";
 
 interface Camera {
   id: string;
   name: string;
   location: string;
+  zone: string;
   status: "active" | "offline";
   addedOn: string;
   streamUrl: string;
@@ -18,25 +21,27 @@ interface Camera {
 
 export default function Cameras() {
   const [cameras, setCameras] = useState<Camera[]>([
-    { id: "1", name: "FrontDoorCam", location: "Entrance", status: "active", addedOn: "Oct 21, 2024", streamUrl: "rtsp://camera1.local" },
-    { id: "2", name: "GarageCam", location: "Garage", status: "active", addedOn: "Oct 20, 2024", streamUrl: "rtsp://camera2.local" },
-    { id: "3", name: "BackyardCam", location: "Backyard", status: "offline", addedOn: "Oct 19, 2024", streamUrl: "rtsp://camera3.local" },
+    { id: "1", name: "FrontDoorCam", location: "Entrance", zone: "Home", status: "active", addedOn: "Oct 21, 2024", streamUrl: "rtsp://camera1.local" },
+    { id: "2", name: "GarageCam", location: "Garage", zone: "Shared", status: "active", addedOn: "Oct 20, 2024", streamUrl: "rtsp://camera2.local" },
+    { id: "3", name: "BackyardCam", location: "Backyard", zone: "Home", status: "offline", addedOn: "Oct 19, 2024", streamUrl: "rtsp://camera3.local" },
+    { id: "4", name: "StreetCam", location: "Street", zone: "Street", status: "active", addedOn: "Oct 18, 2024", streamUrl: "rtsp://camera4.local" },
   ]);
   
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [newCamera, setNewCamera] = useState({ name: "", location: "", streamUrl: "" });
+  const [newCamera, setNewCamera] = useState({ name: "", location: "", zone: "home", streamUrl: "" });
 
   const handleAddCamera = () => {
     const camera: Camera = {
       id: Date.now().toString(),
       name: newCamera.name,
       location: newCamera.location,
+      zone: newCamera.zone.charAt(0).toUpperCase() + newCamera.zone.slice(1),
       status: "active",
       addedOn: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
       streamUrl: newCamera.streamUrl,
     };
     setCameras([...cameras, camera]);
-    setNewCamera({ name: "", location: "", streamUrl: "" });
+    setNewCamera({ name: "", location: "", zone: "home", streamUrl: "" });
     setIsDialogOpen(false);
     console.log("Camera added:", camera);
   };
@@ -87,14 +92,27 @@ export default function Cameras() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="zone-tag">Zone Tag</Label>
+                <Label htmlFor="location">Location</Label>
                 <Input
-                  id="zone-tag"
+                  id="location"
                   placeholder="e.g., Entrance, Backyard"
                   value={newCamera.location}
                   onChange={(e) => setNewCamera({ ...newCamera, location: e.target.value })}
-                  data-testid="input-zone-tag"
+                  data-testid="input-location"
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="zone">Zone</Label>
+                <Select value={newCamera.zone} onValueChange={(value) => setNewCamera({ ...newCamera, zone: value })}>
+                  <SelectTrigger id="zone" data-testid="select-zone">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="home">Home (Private)</SelectItem>
+                    <SelectItem value="street">Street (Shared)</SelectItem>
+                    <SelectItem value="shared">Shared (Community)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <DialogFooter>
@@ -113,6 +131,7 @@ export default function Cameras() {
             <TableRow>
               <TableHead>Camera Name</TableHead>
               <TableHead>Location</TableHead>
+              <TableHead>Zone</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Added On</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -123,6 +142,9 @@ export default function Cameras() {
               <TableRow key={camera.id}>
                 <TableCell className="font-medium" data-testid={`text-camera-${camera.id}`}>{camera.name}</TableCell>
                 <TableCell>{camera.location}</TableCell>
+                <TableCell>
+                  <Badge variant={camera.zone === "Home" ? "secondary" : "default"}>{camera.zone}</Badge>
+                </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
                     {camera.status === "active" ? (
@@ -141,6 +163,10 @@ export default function Cameras() {
                 <TableCell>{camera.addedOn}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-2">
+                    <Button size="sm" variant="outline" data-testid={`button-share-${camera.id}`}>
+                      <Share2 className="w-3 h-3 mr-1" />
+                      Share
+                    </Button>
                     <Button size="icon" variant="ghost" data-testid={`button-edit-${camera.id}`}>
                       <Edit className="w-4 h-4" />
                     </Button>

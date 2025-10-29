@@ -36,9 +36,10 @@ export default function Settings() {
       <h1 className="text-2xl font-bold">Settings</h1>
 
       <Tabs defaultValue="profile" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="profile" data-testid="tab-profile">Profile</TabsTrigger>
           <TabsTrigger value="notifications" data-testid="tab-notifications">Notifications</TabsTrigger>
+          <TabsTrigger value="privacy" data-testid="tab-privacy">Privacy & Retention</TabsTrigger>
           <TabsTrigger value="system" data-testid="tab-system">System Preferences</TabsTrigger>
         </TabsList>
 
@@ -133,6 +134,47 @@ export default function Settings() {
                   onCheckedChange={(checked) => setNotifications({ ...notifications, sms: checked })}
                   data-testid="toggle-sms"
                 />
+              </div>
+            </div>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="privacy" className="space-y-4 mt-6">
+          <Card className="p-6">
+            <h2 className="text-lg font-semibold mb-4">Privacy & Retention</h2>
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <Label htmlFor="retention-period">Data Retention Period</Label>
+                <Select defaultValue="60">
+                  <SelectTrigger id="retention-period" data-testid="select-retention-period">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="30">30 days</SelectItem>
+                    <SelectItem value="60">60 days</SelectItem>
+                    <SelectItem value="90">90 days</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-sm text-muted-foreground">Footage and incidents older than this will be automatically deleted</p>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-base">Blur Faces for Shared Video</Label>
+                  <p className="text-sm text-muted-foreground">Automatically blur faces in community-shared feeds</p>
+                </div>
+                <Switch defaultChecked data-testid="toggle-blur-faces" />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-base">Entity Consent Management</Label>
+                  <p className="text-sm text-muted-foreground">Require consent before storing entity images</p>
+                </div>
+                <Switch defaultChecked data-testid="toggle-consent" />
+              </div>
+              <div className="pt-4 border-t">
+                <Button variant="outline" data-testid="button-download-data">
+                  Download My Data
+                </Button>
               </div>
             </div>
           </Card>

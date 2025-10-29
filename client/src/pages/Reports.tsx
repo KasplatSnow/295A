@@ -34,6 +34,8 @@ const responseTrends = [
 export default function Reports() {
   const [dateRange, setDateRange] = useState("last-7-days");
   const [incidentType, setIncidentType] = useState("all");
+  const [entityType, setEntityType] = useState("all");
+  const [zoneFilter, setZoneFilter] = useState("all");
 
   const handleDownloadCSV = () => {
     console.log("Downloading CSV");
@@ -75,6 +77,34 @@ export default function Reports() {
                 <SelectItem value="intrusion">Intrusion</SelectItem>
                 <SelectItem value="violence">Violence</SelectItem>
                 <SelectItem value="crash">Crash</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Select value={entityType} onValueChange={setEntityType}>
+              <SelectTrigger className="w-[180px]" data-testid="select-entity-type">
+                <SelectValue placeholder="Entity type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Entities</SelectItem>
+                <SelectItem value="person">Person</SelectItem>
+                <SelectItem value="pet">Pet</SelectItem>
+                <SelectItem value="vehicle">Vehicle</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Select value={zoneFilter} onValueChange={setZoneFilter}>
+              <SelectTrigger className="w-[180px]" data-testid="select-zone-filter">
+                <SelectValue placeholder="Zone" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Zones</SelectItem>
+                <SelectItem value="home">Home</SelectItem>
+                <SelectItem value="street">Street</SelectItem>
+                <SelectItem value="shared">Shared</SelectItem>
               </SelectContent>
             </Select>
           </div>
