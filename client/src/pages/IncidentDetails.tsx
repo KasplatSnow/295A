@@ -15,9 +15,10 @@ export default function IncidentDetails() {
     type: "Fire",
     location: "Kitchen",
     confidence: 92,
-    status: "active" as const,
     timestamp: "Friday, 2:30 PM",
-    entities: "None",
+    entity: "Unknown",
+    entityMatchSuggestion: "Dev",
+    entityMatchConfidence: 41,
     snapshotUrl: frontDoorImg,
   };
 
@@ -39,16 +40,11 @@ export default function IncidentDetails() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold" data-testid="text-incident-title">
-            Incident #{incident.number} — {incident.type} Detected
-          </h1>
-          <p className="text-muted-foreground mt-1">{incident.timestamp}</p>
-        </div>
-        <Badge variant={incident.status === "active" ? "destructive" : "secondary"} className="text-sm">
-          {incident.status}
-        </Badge>
+      <div>
+        <h1 className="text-2xl font-bold" data-testid="text-incident-title">
+          Incident #{incident.number} — {incident.type} Detected
+        </h1>
+        <p className="text-muted-foreground mt-1">{incident.timestamp}</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -88,9 +84,25 @@ export default function IncidentDetails() {
               <span className="font-medium" data-testid="text-incident-confidence">{incident.confidence}%</span>
             </div>
             <div className="flex justify-between py-2 border-b">
-              <span className="text-muted-foreground">Entities Detected</span>
-              <span className="font-medium">{incident.entities}</span>
+              <span className="text-muted-foreground">Entity</span>
+              <span className="font-medium">{incident.entity}</span>
             </div>
+            {incident.entityMatchSuggestion && (
+              <div className="py-2 border-b">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-muted-foreground">Suggested Match</span>
+                  <span className="text-sm text-muted-foreground">{incident.entityMatchConfidence}% confidence</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" className="flex-1">
+                    Confirm: {incident.entityMatchSuggestion}
+                  </Button>
+                  <Button size="sm" variant="ghost" className="flex-1">
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+            )}
             <div className="flex justify-between py-2 border-b">
               <span className="text-muted-foreground">Detected At</span>
               <span className="font-medium">{incident.timestamp}</span>

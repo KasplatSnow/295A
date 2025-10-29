@@ -41,9 +41,9 @@ export default function Dashboard() {
   ];
 
   const alerts = [
-    { id: 1, type: "fire" as const, location: "Kitchen", time: "2:31 PM", status: "active" as const },
-    { id: 2, type: "intrusion" as const, location: "Backyard", time: "1:12 AM", status: "active" as const },
-    { id: 3, type: "violence" as const, location: "Garage", time: "11:45 PM", status: "active" as const },
+    { id: 1, type: "fire" as const, location: "Kitchen", time: "2:31 PM", entity: "Unknown", confidence: 92 },
+    { id: 2, type: "intrusion" as const, location: "Backyard", time: "1:12 AM", entity: "Unknown", confidence: 88 },
+    { id: 3, type: "violence" as const, location: "Garage", time: "11:45 PM", entity: "Jason P. (Neighbor)", confidence: 85 },
   ];
 
   return (
@@ -93,7 +93,8 @@ export default function Dashboard() {
                   type={alert.type}
                   location={alert.location}
                   time={alert.time}
-                  status={alert.status}
+                  entity={alert.entity}
+                  confidence={alert.confidence}
                   onClick={() => setLocation(`/incidents/${alert.id}`)}
                 />
               ))}

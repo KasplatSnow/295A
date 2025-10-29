@@ -6,7 +6,8 @@ interface AlertCardProps {
   type: "fire" | "intrusion" | "violence" | "crash";
   location: string;
   time: string;
-  status?: "active" | "resolved";
+  entity?: string;
+  confidence?: number;
   onClick?: () => void;
 }
 
@@ -33,7 +34,7 @@ const alertConfig = {
   },
 };
 
-export default function AlertCard({ type, location, time, status = "active", onClick }: AlertCardProps) {
+export default function AlertCard({ type, location, time, entity, confidence, onClick }: AlertCardProps) {
   const config = alertConfig[type];
   const Icon = config.icon;
 
@@ -48,15 +49,17 @@ export default function AlertCard({ type, location, time, status = "active", onC
           <Icon className="w-5 h-5" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2">
-            <h4 className="font-semibold text-sm">{config.label} detected</h4>
-            {status && (
-              <Badge variant={status === "active" ? "destructive" : "secondary"} className="shrink-0">
-                {status}
-              </Badge>
-            )}
-          </div>
-          <p className="text-sm text-muted-foreground mt-1">{location} at {time}</p>
+          <h4 className="font-semibold text-sm">{config.label} detected</h4>
+          <p className="text-sm text-muted-foreground mt-1">
+            {location} — {time}
+            {confidence && ` — Confidence ${confidence}%`}
+          </p>
+          {entity && (
+            <p className="text-sm mt-1">
+              <span className="text-muted-foreground">Entity:</span>{" "}
+              <span className={entity.includes("Unknown") ? "text-orange-600 font-medium" : ""}>{entity}</span>
+            </p>
+          )}
         </div>
       </div>
     </Card>
