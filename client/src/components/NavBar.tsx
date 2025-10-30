@@ -26,8 +26,8 @@ export default function NavBar() {
         <div className="flex items-center gap-4 sm:gap-8">
           <Link href="/dashboard" className="flex items-center gap-2 hover-elevate px-2 py-1 rounded">
             <Shield className="w-6 h-6 text-primary" />
-            <span className="font-semibold text-base sm:text-lg hidden xs:inline">Secure Cloud Intelligence</span>
-            <span className="font-semibold text-base sm:text-lg xs:hidden">SCI</span>
+            <span className="font-semibold text-base sm:text-lg hidden xs:inline">VigilZone</span>
+            <span className="font-semibold text-base sm:text-lg xs:hidden">VZ</span>
           </Link>
           
           <div className="hidden md:flex items-center gap-1">

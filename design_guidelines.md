@@ -1,7 +1,7 @@
-# Secure Cloud Intelligence — Design Guidelines
+# VigilZone — Design Guidelines
 
 ## Design Approach
-**Utility-Focused Dashboard Design**: This is a professional security monitoring system requiring clarity, efficiency, and immediate comprehension. The design prioritizes data visibility, real-time information access, and quick decision-making over visual experimentation.
+**Utility-Focused Dashboard Design**: This is a professional community surveillance and security monitoring system requiring clarity, efficiency, and immediate comprehension. The design prioritizes data visibility, real-time information access, and quick decision-making over visual experimentation.
 
 ## Core Design Principles
 - **Professional Dashboard Aesthetic**: Clean, modern interface that feels like a real production security product

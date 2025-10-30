@@ -1,8 +1,8 @@
-# Secure Cloud Intelligence
+# VigilZone
 
 ## Overview
 
-Secure Cloud Intelligence is a community-based smart surveillance web application that provides real-time anomaly detection from live video streams. The system features context-aware security monitoring with entity recognition, incident management, and community-focused privacy controls. Built as a full-stack TypeScript application with React frontend and Express backend, it emphasizes professional dashboard design, real-time data visualization, granular privacy settings, and a complete light/dark theme system for shared surveillance scenarios.
+VigilZone is a community-based smart surveillance web application that provides real-time anomaly detection from live video streams. The system features context-aware security monitoring with entity recognition, incident management, and community-focused privacy controls. Built as a full-stack TypeScript application with React frontend and Express backend, it emphasizes professional dashboard design, real-time data visualization, granular privacy settings, and a complete light/dark theme system for shared surveillance scenarios.
 
 ## User Preferences
 

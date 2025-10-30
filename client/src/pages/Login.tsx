@@ -28,8 +28,8 @@ export default function Login() {
               <Shield className="w-8 h-8 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold" data-testid="text-title">Secure Cloud Intelligence</h1>
-          <p className="text-muted-foreground mt-2">Smart, Context-Aware Home Security</p>
+          <h1 className="text-2xl font-bold" data-testid="text-title">VigilZone</h1>
+          <p className="text-muted-foreground mt-2">Community Smart Surveillance</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
