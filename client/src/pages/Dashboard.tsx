@@ -9,7 +9,7 @@ import CameraFeed from "@/components/CameraFeed";
 import AlertCard from "@/components/AlertCard";
 import StatsCard from "@/components/StatsCard";
 import { Maximize2, Pause, Play, Activity, Clock, TrendingUp, User, Dog, Car } from "lucide-react";
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 
 import frontDoorImg from '@assets/generated_images/Front_door_camera_view_eee34996.png';
 import livingRoomImg from '@assets/generated_images/Living_room_camera_view_c398b56c.png';
@@ -17,10 +17,10 @@ import garageImg from '@assets/generated_images/Garage_camera_view_63ee9c11.png'
 import backyardImg from '@assets/generated_images/Backyard_camera_view_1f8a55c4.png';
 
 const pieData = [
-  { name: 'Fire', value: 15, color: 'hsl(var(--destructive))' },
-  { name: 'Intrusion', value: 35, color: 'hsl(var(--chart-2))' },
-  { name: 'Violence', value: 25, color: 'hsl(var(--chart-3))' },
-  { name: 'Crash', value: 25, color: 'hsl(var(--chart-4))' },
+  { name: 'Fire', value: 15, color: '#EF4444', percentage: '15%' },
+  { name: 'Intrusion', value: 35, color: '#F59E0B', percentage: '35%' },
+  { name: 'Violence', value: 25, color: '#10B981', percentage: '25%' },
+  { name: 'Crash', value: 25, color: '#8B5CF6', percentage: '25%' },
 ];
 
 const latencyData = [
@@ -30,7 +30,40 @@ const latencyData = [
   { time: '12:00', latency: 55 },
   { time: '16:00', latency: 50 },
   { time: '20:00', latency: 47 },
+  { time: '24:00', latency: 43 },
 ];
+
+const CustomTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-card border border-border rounded-lg shadow-lg p-3">
+        <p className="text-sm font-medium">{payload[0].payload.time}</p>
+        <p className="text-sm text-primary font-semibold">{payload[0].value}ms</p>
+      </div>
+    );
+  }
+  return null;
+};
+
+const CustomPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percentage, name }: any) => {
+  const RADIAN = Math.PI / 180;
+  const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+
+  return (
+    <text 
+      x={x} 
+      y={y} 
+      fill="white" 
+      textAnchor={x > cx ? 'start' : 'end'} 
+      dominantBaseline="central"
+      className="text-xs font-semibold"
+    >
+      {percentage}
+    </text>
+  );
+};
 
 export default function Dashboard() {
   const [, setLocation] = useLocation();
@@ -153,23 +186,58 @@ export default function Dashboard() {
 
             <Card className="mt-4 p-4">
               <h3 className="text-sm font-semibold mb-2">Anomaly Type Breakdown</h3>
-              <ResponsiveContainer width="100%" height={200}>
+              <ResponsiveContainer width="100%" height={220}>
                 <PieChart>
+                  <defs>
+                    {pieData.map((entry, index) => (
+                      <linearGradient key={`gradient-${index}`} id={`gradient-${entry.name}`} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={entry.color} stopOpacity={0.95} />
+                        <stop offset="100%" stopColor={entry.color} stopOpacity={0.75} />
+                      </linearGradient>
+                    ))}
+                  </defs>
                   <Pie
                     data={pieData}
                     cx="50%"
                     cy="50%"
                     labelLine={false}
-                    outerRadius={80}
+                    label={(props) => <CustomPieLabel {...props} />}
+                    outerRadius={85}
+                    innerRadius={45}
                     fill="#8884d8"
                     dataKey="value"
+                    paddingAngle={2}
+                    animationBegin={0}
+                    animationDuration={800}
                   >
                     {pieData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
+                      <Cell 
+                        key={`cell-${index}`} 
+                        fill={`url(#gradient-${entry.name})`}
+                        stroke="hsl(var(--background))"
+                        strokeWidth={2}
+                      />
                     ))}
                   </Pie>
-                  <Legend />
-                  <Tooltip />
+                  <Legend 
+                    verticalAlign="bottom" 
+                    height={36}
+                    iconType="circle"
+                    formatter={(value) => <span className="text-xs">{value}</span>}
+                  />
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (active && payload && payload.length) {
+                        return (
+                          <div className="bg-card border border-border rounded-lg shadow-lg p-3">
+                            <p className="text-sm font-medium">{payload[0].name}</p>
+                            <p className="text-sm text-primary font-semibold">{payload[0].value}%</p>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
                 </PieChart>
               </ResponsiveContainer>
             </Card>
@@ -223,14 +291,37 @@ export default function Dashboard() {
             
             <Card className="p-4 mb-4">
               <h3 className="text-sm font-semibold mb-3">Latency (ms)</h3>
-              <ResponsiveContainer width="100%" height={120}>
-                <LineChart data={latencyData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-                  <YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-                  <Tooltip />
-                  <Line type="monotone" dataKey="latency" stroke="hsl(var(--primary))" strokeWidth={2} />
-                </LineChart>
+              <ResponsiveContainer width="100%" height={140}>
+                <AreaChart data={latencyData}>
+                  <defs>
+                    <linearGradient id="colorLatency" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
+                  <XAxis 
+                    dataKey="time" 
+                    tick={{ fontSize: 10 }} 
+                    stroke="hsl(var(--muted-foreground))"
+                    tickLine={false}
+                  />
+                  <YAxis 
+                    tick={{ fontSize: 10 }} 
+                    stroke="hsl(var(--muted-foreground))"
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Area 
+                    type="monotone" 
+                    dataKey="latency" 
+                    stroke="hsl(var(--primary))" 
+                    strokeWidth={2.5}
+                    fill="url(#colorLatency)"
+                    animationDuration={1000}
+                  />
+                </AreaChart>
               </ResponsiveContainer>
             </Card>
 
