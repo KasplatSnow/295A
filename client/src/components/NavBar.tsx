@@ -4,6 +4,7 @@ import { Shield, LayoutDashboard, Video, FileText, Settings as SettingsIcon, Ale
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { ThemeToggle } from "./ThemeToggle";
 
 export default function NavBar() {
   const [location] = useLocation();
@@ -52,7 +53,8 @@ export default function NavBar() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <ThemeToggle />
           <div className="text-right hidden sm:block">
             <p className="text-sm font-medium">John Doe</p>
             <p className="text-xs text-muted-foreground">Administrator</p>

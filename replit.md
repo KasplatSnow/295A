@@ -2,7 +2,7 @@
 
 ## Overview
 
-Secure Cloud Intelligence is a community-based smart surveillance web application that provides real-time anomaly detection from live video streams. The system features context-aware security monitoring with entity recognition, incident management, and community-focused privacy controls. Built as a full-stack TypeScript application with React frontend and Express backend, it emphasizes professional dashboard design, real-time data visualization, and granular privacy settings for shared surveillance scenarios.
+Secure Cloud Intelligence is a community-based smart surveillance web application that provides real-time anomaly detection from live video streams. The system features context-aware security monitoring with entity recognition, incident management, and community-focused privacy controls. Built as a full-stack TypeScript application with React frontend and Express backend, it emphasizes professional dashboard design, real-time data visualization, granular privacy settings, and a complete light/dark theme system for shared surveillance scenarios.
 
 ## User Preferences
 
@@ -21,8 +21,10 @@ Preferred communication style: Simple, everyday language.
 **UI Component System**
 - Shadcn/ui component library based on Radix UI primitives
 - Tailwind CSS for utility-first styling with custom design tokens
-- Component theming via CSS variables for light mode
+- Component theming via CSS variables for both light and dark modes
+- Theme switching system with React Context and localStorage persistence
 - Custom design system following professional dashboard aesthetics with rounded corners, card-based layouts, and consistent spacing
+- Responsive mobile navigation with hamburger menu and slide-out drawer
 
 **State Management Approach**
 - React Query handles all server state with infinite stale time (manual refetching)
