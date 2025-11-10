@@ -111,6 +111,15 @@ export default function SignupPage() {
             >
               {loading ? "Creating Account..." : "Sign Up"}
             </Button>
+            <Typography variant="body2" align="center" sx={{ mt: 2 }}>
+              Already have an account?{" "}
+              <a
+                href="/login"
+                style={{ textDecoration: "none", color: "#1976d2" }}
+              >
+                Login
+              </a>
+            </Typography>
           </Stack>
         </Box>
       </Paper>
