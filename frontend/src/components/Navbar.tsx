@@ -15,8 +15,11 @@ export default function Navbar() {
     <AppBar position="static">
       <Toolbar>
         <Typography variant="h6" sx={{ flexGrow: 1 }}>
-          Surveillance Dashboard
+          <Button color="inherit" component={Link} to={"/dashboard"}>
+            Surveillance Dashboard
+          </Button>
         </Typography>
+
         <Stack direction="row" spacing={2}>
           <Button color="inherit" component={Link} to="/profile">
             Profile
