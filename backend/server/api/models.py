@@ -3,6 +3,22 @@ from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
+from django.contrib.auth.models import User
+
+def profile_pic_path(instance, filename):
+    # store inside media/profiles/<tenant_id>/<username>/
+    tenant_id = instance.tenant.id if instance.tenant else "unassigned"
+    return f"profiles/tenant_{tenant_id}/{instance.user.username}/{filename}"
+
+class Profile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
+    tenant = models.ForeignKey("Tenant", on_delete=models.CASCADE, null=True, blank=True)
+    profile_pic = models.ImageField(upload_to=profile_pic_path, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.username} ({self.tenant.name if self.tenant else 'No Tenant'})"
+
 class TimeStamped(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -26,9 +42,11 @@ class Membership(TimeStamped):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="memberships")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="memberships")
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.MEMBER)
-
     class Meta:
         unique_together = [("tenant", "user")]
+    
+    def __str__(self):
+        return f"{self.user.username} @ {self.tenant.name} ({self.role})"
 
 class Camera(TimeStamped):
     class Status(models.TextChoices):

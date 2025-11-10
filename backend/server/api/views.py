@@ -1,9 +1,10 @@
 from rest_framework import viewsets, permissions
 from rest_framework.exceptions import PermissionDenied, NotAuthenticated
-from .models import Tenant, Membership, Camera, Incident, Detection, Alert, AuditLog
+from django.db import transaction
+from .models import Tenant, Membership, Camera, Incident, Detection, Alert, AuditLog, Profile
 from .serializers import (
     TenantSerializer, MembershipSerializer, CameraSafeSerializer, CameraAdminSerializer,
-    IncidentSerializer, DetectionSerializer, AlertSerializer, AuditLogSerializer
+    IncidentSerializer, DetectionSerializer, AlertSerializer, AuditLogSerializer, ProfileSerializer
 )
 
 class IsAuthenticatedOrReadOnly(permissions.IsAuthenticatedOrReadOnly):
@@ -47,9 +48,31 @@ class TenantScopedViewSet(viewsets.ModelViewSet):
         serializer.save(**{self.tenant_field: tenant})
 
 class TenantViewSet(viewsets.ModelViewSet):
-    queryset = Tenant.objects.all()
     serializer_class = TenantSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return Tenant.objects.all()
+        # return only tenants where the user has a membership
+        return Tenant.objects.filter(memberships__user=user).distinct()
+    
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx["request"] = self.request
+        return ctx
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        # no X-Tenant-ID usage here; this is global creation
+        tenant = serializer.save()  # creates Tenant(name, plan)
+        Membership.objects.get_or_create(
+            user=self.request.user,
+            tenant=tenant,
+            defaults={"role": "owner"},
+        )
+
 
 class MembershipViewSet(TenantScopedViewSet):
     queryset = Membership.objects.all()
@@ -83,3 +106,14 @@ class AuditLogViewSet(TenantScopedViewSet):
     queryset = AuditLog.objects.all()
     serializer_class = AuditLogSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+class ProfileViewSet(viewsets.ModelViewSet):
+    serializer_class = ProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        # Users can only access their own profile
+        return Profile.objects.filter(user=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(user=self.request.user)
