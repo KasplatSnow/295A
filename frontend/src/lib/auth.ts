@@ -2,6 +2,9 @@ import { api, setAccessToken } from "./api";
 
 type TokenResponse = { access: string; refresh: string };
 
+export async function register(username:string,email:string,password:string){
+  await api.post("/auth/register/", { username, email, password });
+}
 export async function login(username: string, password: string) {
   const { data } = await api.post<TokenResponse>("/auth/token/", { username, password });
   setAccessToken(data.access);
