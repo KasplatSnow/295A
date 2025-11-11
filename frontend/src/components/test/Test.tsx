@@ -2,8 +2,6 @@ import { useState } from "react";
 import { login } from "../../lib/auth";
 import { api } from "../../lib/api";
 
-const TENANT_ID = process.env.REACT_APP_TENANT_ID ?? "";
-
 export default function Test() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
