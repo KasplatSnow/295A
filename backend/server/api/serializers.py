@@ -2,9 +2,21 @@ from rest_framework import serializers
 from .models import Tenant, Membership, Camera, Incident, Detection, Alert, AuditLog
 
 class TenantSerializer(serializers.ModelSerializer):
+    role = serializers.SerializerMethodField()
+
     class Meta:
         model = Tenant
         fields = "__all__"
+
+    def get_role(self, obj):
+        request = self.context.get("request")
+        if not request:
+            return None
+        user = request.user
+        if user.is_superuser:
+            return "owner"
+        m = Membership.objects.filter(user=user, tenant=obj).first()
+        return m.role if m else None
 
 class MembershipSerializer(serializers.ModelSerializer):
     class Meta:
