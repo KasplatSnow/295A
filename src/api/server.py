@@ -3,8 +3,9 @@ FastAPI server for alerts, evidence, live frame feed,
 upload mode (offline video processing), and /metrics.
 """
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Query, Body
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import asyncio
@@ -15,6 +16,7 @@ import threading
 import shutil
 import cv2
 import numpy as np
+import httpx
 from ..common.log import setup_logger
 
 
@@ -30,7 +32,22 @@ class AlertServer:
         self.evidence_dir = Path(evidence_dir)
         self.static_dir = Path(static_dir) if static_dir else Path(__file__).parent / "static"
 
-        self.app = FastAPI(title="CCTV AI Module v2", version="2.0.0")
+        self.app = FastAPI(
+            title="VigilZone AI Module",
+            version="2.0.0",
+            description="Real-time CCTV anomaly detection microservice. "
+                        "Exposes REST + WebSocket + Webhook endpoints for integration.",
+        )
+
+        # CORS — allow the main-drive microservice (and any origin during dev)
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],        # tighten in production
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
         self.logger = setup_logger("AlertServer")
 
         # WebSocket clients
@@ -56,6 +73,9 @@ class AlertServer:
         self._last_motion_stats: Dict[str, Any] = {}
         self._last_temporal_stats: Dict[str, Any] = {}
 
+        # Startup time for uptime tracking
+        self._start_time = time.time()
+
         # GPU scheduler + throttle refs (set externally)
         self._gpu_scheduler = None
         self._auto_throttle = None
@@ -77,7 +97,30 @@ class AlertServer:
         # §2.2 — shared frame store for camera capture enrollment
         self._frame_store = None
 
+        # ── Webhook registry ──────────────────────────────────────────
+        self._webhooks: Dict[str, Dict[str, Any]] = {}  # id → {url, events, secret, ...}
+        self._webhook_file = Path("data/webhooks.json")
+        self._webhook_file.parent.mkdir(parents=True, exist_ok=True)
+        self._load_webhooks()
+
         self._setup_routes()
+
+    # ── Webhook persistence helpers ───────────────────────────────────
+    def _load_webhooks(self):
+        """Load webhooks from disk."""
+        if self._webhook_file.exists():
+            try:
+                self._webhooks = json.loads(self._webhook_file.read_text())
+                self.logger.info(f"Loaded {len(self._webhooks)} webhook(s)")
+            except Exception as e:
+                self.logger.error(f"Failed to load webhooks: {e}")
+
+    def _save_webhooks(self):
+        """Persist webhooks to disk."""
+        try:
+            self._webhook_file.write_text(json.dumps(self._webhooks, indent=2))
+        except Exception as e:
+            self.logger.error(f"Failed to save webhooks: {e}")
 
     def set_alert_buffer(self, buffer: List[Dict[str, Any]]):
         self.alert_buffer = buffer
@@ -848,6 +891,238 @@ class AlertServer:
                 self.ws_clients.remove(websocket)
                 self.logger.info(f"WS client disconnected (remaining: {len(self.ws_clients)})")
 
+        # ==============================================================
+        # WEBHOOK MANAGEMENT — register/list/delete/test webhooks
+        # ==============================================================
+
+        @self.app.post("/webhooks")
+        async def register_webhook(
+            url: str = Body(..., description="Target URL to POST alerts to"),
+            events: List[str] = Body(
+                ["alert.created"],
+                description="Event types to subscribe to: alert.created, alert.resolved, entity.enrolled, entity.deleted, system.health",
+            ),
+            secret: Optional[str] = Body(None, description="Optional shared secret for HMAC-SHA256 signature verification"),
+            metadata: Optional[Dict[str, Any]] = Body(None, description="Optional metadata for reference"),
+        ):
+            """
+            Register a webhook endpoint. The AI module will POST events to this URL.
+            Returns the webhook ID for management.
+            """
+            wh_id = f"wh_{uuid.uuid4().hex[:12]}"
+            self._webhooks[wh_id] = {
+                "id": wh_id,
+                "url": url,
+                "events": events,
+                "secret": secret,
+                "metadata": metadata or {},
+                "created_at": time.time(),
+                "active": True,
+                "delivery_stats": {"success": 0, "failure": 0, "last_status": None},
+            }
+            self._save_webhooks()
+            self.logger.info(f"Webhook registered: {wh_id} → {url} events={events}")
+            return {"id": wh_id, "url": url, "events": events, "active": True}
+
+        @self.app.get("/webhooks")
+        async def list_webhooks():
+            """List all registered webhooks."""
+            return [
+                {"id": w["id"], "url": w["url"], "events": w["events"],
+                 "active": w.get("active", True), "delivery_stats": w.get("delivery_stats", {})}
+                for w in self._webhooks.values()
+            ]
+
+        @self.app.delete("/webhooks/{webhook_id}")
+        async def delete_webhook(webhook_id: str):
+            """Remove a registered webhook."""
+            if webhook_id not in self._webhooks:
+                return JSONResponse(status_code=404, content={"error": "Webhook not found"})
+            del self._webhooks[webhook_id]
+            self._save_webhooks()
+            return {"removed": True, "webhook_id": webhook_id}
+
+        @self.app.put("/webhooks/{webhook_id}")
+        async def update_webhook(
+            webhook_id: str,
+            url: Optional[str] = Body(None),
+            events: Optional[List[str]] = Body(None),
+            active: Optional[bool] = Body(None),
+            secret: Optional[str] = Body(None),
+        ):
+            """Update an existing webhook's URL, events, or active status."""
+            wh = self._webhooks.get(webhook_id)
+            if not wh:
+                return JSONResponse(status_code=404, content={"error": "Webhook not found"})
+            if url is not None:
+                wh["url"] = url
+            if events is not None:
+                wh["events"] = events
+            if active is not None:
+                wh["active"] = active
+            if secret is not None:
+                wh["secret"] = secret
+            self._save_webhooks()
+            return {"id": webhook_id, "url": wh["url"], "events": wh["events"], "active": wh["active"]}
+
+        @self.app.post("/webhooks/test")
+        async def test_webhook(
+            url: str = Body(..., description="URL to send a test payload to"),
+        ):
+            """Send a test event to verify the webhook endpoint is reachable."""
+            test_payload = {
+                "event": "webhook.test",
+                "timestamp": time.time(),
+                "data": {"message": "This is a test event from VigilZone AI Module"},
+            }
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.post(url, json=test_payload)
+                return {"status": resp.status_code, "ok": resp.is_success, "body": resp.text[:500]}
+            except Exception as e:
+                return {"status": None, "ok": False, "error": str(e)}
+
+        # ==============================================================
+        # MICROSERVICE INTEGRATION API  (/api/v1/...)
+        # Dedicated JSON-first endpoints for the main-drive service.
+        # ==============================================================
+
+        @self.app.get("/api/v1/health")
+        async def api_health():
+            """
+            Lightweight health-check for service-mesh / load-balancer probes.
+            Returns module status, uptime, camera count, alert count.
+            """
+            uptime_s = time.time() - self._start_time
+            cam_count = len(self._camera_processors)
+            alert_count = len(self._aggregator.get_recent_alerts()) if self._aggregator else len(self.alert_buffer)
+            return {
+                "service": "vigilzone-ai",
+                "status": "healthy",
+                "version": "2.0.0",
+                "uptime_seconds": round(uptime_s, 1),
+                "cameras_active": cam_count,
+                "alerts_total": alert_count,
+                "ws_clients": len(self.ws_clients),
+                "webhooks_registered": len(self._webhooks),
+            }
+
+        @self.app.get("/api/v1/alerts")
+        async def api_alerts(
+            limit: int = Query(50, ge=1, le=1000),
+            severity: Optional[str] = Query(None, description="Filter by severity: SEVERE, HIGH, MED, LOW"),
+            alert_type: Optional[str] = Query(None, description="Filter by type: FIRE_SMOKE, VIOLENCE_FIGHT, etc."),
+            camera_id: Optional[str] = Query(None, description="Filter by camera"),
+        ):
+            """
+            Fetch recent alerts with optional filters.
+            Designed for polling integration (complement to webhooks).
+            """
+            if self._aggregator:
+                all_alerts = self._aggregator.get_recent_alerts(limit=1000)
+            else:
+                all_alerts = [a if isinstance(a, dict) else a for a in self.alert_buffer[-1000:]]
+
+            # Apply filters
+            filtered = all_alerts
+            if severity:
+                filtered = [a for a in filtered if a.get("severity", "").upper() == severity.upper()]
+            if alert_type:
+                filtered = [a for a in filtered if a.get("type", "").upper() == alert_type.upper()]
+            if camera_id:
+                filtered = [a for a in filtered if a.get("camera_id") == camera_id]
+
+            return {"count": len(filtered[-limit:]), "alerts": filtered[-limit:]}
+
+        @self.app.get("/api/v1/cameras")
+        async def api_cameras():
+            """List cameras with their current status and config summary."""
+            result = []
+            for proc in self._camera_processors:
+                stats = proc.get_stats()
+                result.append({
+                    "camera_id": stats.get("camera_id"),
+                    "source_type": stats.get("source_type"),
+                    "active": stats.get("active", True),
+                    "fps": stats.get("fps"),
+                    "lanes": stats.get("enabled_lanes", []),
+                    "frame_count": stats.get("frame_count", 0),
+                })
+            return {"count": len(result), "cameras": result}
+
+        @self.app.get("/api/v1/cameras/{camera_id}/snapshot")
+        async def api_camera_snapshot(camera_id: str):
+            """Get latest JPEG snapshot from a camera (for embedding in main-drive UI)."""
+            for proc in self._camera_processors:
+                if proc.camera_id == camera_id:
+                    frame, ts = proc.reader.get_latest()
+                    if frame is not None:
+                        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                        return StreamingResponse(
+                            iter([buf.tobytes()]),
+                            media_type="image/jpeg",
+                            headers={"X-Timestamp": ts or "", "Cache-Control": "no-cache"},
+                        )
+            return JSONResponse(status_code=404, content={"error": "Camera not found or no frame"})
+
+        @self.app.get("/api/v1/entities")
+        async def api_entities(
+            category: Optional[str] = Query(None, description="Filter: KNOWN_PERSON, PET"),
+        ):
+            """List enrolled entities."""
+            if self._entity_store is None:
+                return JSONResponse(status_code=503, content={"error": "Identity subsystem not enabled"})
+            entities = self._entity_store.list_entities(category)
+            return {"count": len(entities), "entities": entities}
+
+        @self.app.get("/api/v1/entities/{entity_id}")
+        async def api_entity_detail(entity_id: str):
+            """Get a single entity with enrollment images."""
+            if self._entity_store is None:
+                return JSONResponse(status_code=503, content={"error": "Identity subsystem not enabled"})
+            entity = self._entity_store.get_entity(entity_id)
+            if not entity:
+                return JSONResponse(status_code=404, content={"error": "Entity not found"})
+            # Attach image URLs
+            img_dir = self._entity_store.enroll_img_dir / entity_id
+            images = []
+            if img_dir.exists():
+                images = [f"/enroll_images/{entity_id}/{f.name}" for f in sorted(img_dir.iterdir()) if f.is_file()]
+            entity["images"] = images
+            return entity
+
+        @self.app.get("/api/v1/system/status")
+        async def api_system_status():
+            """
+            Full system status for service dashboard: device info, lanes, webhooks,
+            suppression stats, missing assets.
+            """
+            result: Dict[str, Any] = {
+                "service": "vigilzone-ai",
+                "version": "2.0.0",
+                "uptime_seconds": round(time.time() - self._start_time, 1),
+                "device": {},
+                "cameras": [],
+                "webhooks": len(self._webhooks),
+                "diagnostics": {},
+            }
+            if self._doctor_report:
+                dev = self._doctor_report.device_info
+                result["device"] = {
+                    "torch_device": dev.torch_device,
+                    "gpu_name": dev.device_name,
+                    "gpu_usable": dev.gpu_usable,
+                }
+            for proc in self._camera_processors:
+                result["cameras"].append({
+                    "camera_id": proc.camera_id,
+                    "active": True,
+                    "lanes": list(proc.lanes.keys()),
+                })
+            if self._aggregator:
+                result["diagnostics"] = self._aggregator.get_diagnostics()
+            return result
+
     # ------------------------------------------------------------------
     def set_gpu_scheduler(self, scheduler):
         """Attach GPU scheduler for /metrics."""
@@ -941,18 +1216,67 @@ class AlertServer:
 
     # ------------------------------------------------------------------
     async def broadcast_alert(self, alert: Dict[str, Any]):
-        if not self.ws_clients:
+        """Push alert to WebSocket clients AND to registered webhooks."""
+        # WebSocket push
+        if self.ws_clients:
+            message = json.dumps(alert)
+            disconnected = []
+            for client in self.ws_clients:
+                try:
+                    await client.send_text(message)
+                except Exception:
+                    disconnected.append(client)
+            for client in disconnected:
+                if client in self.ws_clients:
+                    self.ws_clients.remove(client)
+
+        # Webhook dispatch (async, non-blocking)
+        await self._dispatch_webhooks("alert.created", alert)
+
+    async def _dispatch_webhooks(self, event_type: str, data: Any):
+        """POST event to all active webhooks subscribed to this event type."""
+        targets = [
+            wh for wh in self._webhooks.values()
+            if wh.get("active", True) and event_type in wh.get("events", [])
+        ]
+        if not targets:
             return
-        message = json.dumps(alert)
-        disconnected = []
-        for client in self.ws_clients:
+
+        payload = {
+            "event": event_type,
+            "timestamp": time.time(),
+            "data": data,
+        }
+
+        async def _send(wh: Dict):
+            headers = {"Content-Type": "application/json", "X-Vigilzone-Event": event_type}
+            # HMAC signature if secret is configured
+            if wh.get("secret"):
+                import hmac, hashlib
+                body = json.dumps(payload)
+                sig = hmac.new(wh["secret"].encode(), body.encode(), hashlib.sha256).hexdigest()
+                headers["X-Vigilzone-Signature"] = f"sha256={sig}"
             try:
-                await client.send_text(message)
-            except Exception:
-                disconnected.append(client)
-        for client in disconnected:
-            if client in self.ws_clients:
-                self.ws_clients.remove(client)
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.post(wh["url"], json=payload, headers=headers)
+                wh.setdefault("delivery_stats", {"success": 0, "failure": 0})
+                if resp.is_success:
+                    wh["delivery_stats"]["success"] += 1
+                else:
+                    wh["delivery_stats"]["failure"] += 1
+                wh["delivery_stats"]["last_status"] = resp.status_code
+            except Exception as e:
+                wh.setdefault("delivery_stats", {"success": 0, "failure": 0})
+                wh["delivery_stats"]["failure"] += 1
+                wh["delivery_stats"]["last_status"] = str(e)
+                self.logger.debug(f"Webhook delivery failed ({wh['url']}): {e}")
+
+        # Fire all webhook calls concurrently — don't block alert pipeline
+        await asyncio.gather(*[_send(wh) for wh in targets], return_exceptions=True)
+
+    async def dispatch_entity_event(self, event_type: str, entity_data: Dict[str, Any]):
+        """Dispatch entity.enrolled / entity.deleted events to webhooks."""
+        await self._dispatch_webhooks(event_type, entity_data)
 
     # ------------------------------------------------------------------
     def run(self):
