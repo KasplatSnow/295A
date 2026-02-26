@@ -106,6 +106,24 @@ class TemporalVerifierLane(BaseLane):
         self.logger.info(f"Temporal verifier ready (stub={self._stub})")
 
     # ------------------------------------------------------------------
+    @property
+    def available(self) -> bool:
+        """Whether the temporal verifier is usable (model loaded or stub active)."""
+        return self._initialized
+
+    @property
+    def reason_unavailable(self) -> Optional[str]:
+        """Reason string if not available, else None."""
+        if not self._initialized:
+            return "init() not yet called"
+        return None
+
+    @property
+    def is_stub(self) -> bool:
+        """Whether the verifier is using the motion-energy stub."""
+        return self._stub
+
+    # ------------------------------------------------------------------
     def _load_torchhub(self, cfg: Dict[str, Any]) -> bool:
         """Load X3D-S (or compatible) model from PyTorchVideo TorchHub."""
         hub_repo = cfg.get("hub_repo", "facebookresearch/pytorchvideo")
@@ -222,7 +240,13 @@ class TemporalVerifierLane(BaseLane):
 
     def get_last_run_stats(self) -> Dict[str, Any]:
         """§C5: Return last temporal verifier run stats for diagnostics."""
-        return getattr(self, "_last_run_stats", {})
+        stats = getattr(self, "_last_run_stats", {})
+        # Always include base info even before first run
+        stats.setdefault("stub", self._stub)
+        stats.setdefault("device", self._torch_device)
+        stats.setdefault("available", self.available)
+        stats.setdefault("reason_unavailable", self.reason_unavailable)
+        return stats
 
     # --- helpers -------------------------------------------------------
     def _motion_energy(self, frame_bgr: np.ndarray) -> float:

@@ -24,7 +24,7 @@ class ViolenceCandidateLane(BaseLane):
                  models_cfg: Dict[str, Any], device: str):
         super().__init__(lane_name, camera_id, models_cfg, device)
         self.logger = setup_logger(f"ViolenceCandidate-{camera_id}")
-        self.motion_threshold = 0.55
+        self.motion_threshold = 0.60  # §3 tightened from 0.55
         self.candidate_hits = 2
         self._prev_gray: Optional[np.ndarray] = None
         self._prev_person_count: int = 0
@@ -34,7 +34,7 @@ class ViolenceCandidateLane(BaseLane):
     # ------------------------------------------------------------------
     def init(self):
         cfg = self.models_cfg.get("models", {}).get("violence_candidate", {})
-        self.motion_threshold = cfg.get("motion_threshold", 0.55)
+        self.motion_threshold = cfg.get("motion_threshold", 0.60)
         self.candidate_hits = cfg.get("candidate_hits", 2)
         self._initialized = True
         self.logger.info(

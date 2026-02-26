@@ -81,14 +81,14 @@ LABEL_TO_ALERT_TYPE = {
     "anomaly": "UNKNOWN_SEVERE_ANOMALY",
 }
 
-# Alert type → severity
+# Alert type → base severity  (VIOLENCE/FALL start MED; only SEVERE after temporal confirm)
 ALERT_SEVERITY = {
     "FIRE_SMOKE": "SEVERE",
-    "VIOLENCE_FIGHT": "SEVERE",
-    "FALL": "SEVERE",
+    "VIOLENCE_FIGHT": "MED",       # upgraded to SEVERE by temporal verifier
+    "FALL": "MED",                  # upgraded to SEVERE by temporal verifier
     "WEAPON_DETECTED": "SEVERE",
     "INTRUSION_PERSON_IN_ZONE": "HIGH",
-    "UNKNOWN_SEVERE_ANOMALY": "HIGH",
+    "UNKNOWN_SEVERE_ANOMALY": "MED",  # was HIGH; tightened to reduce FPs
 }
 
 
@@ -267,13 +267,8 @@ class AlertAggregator:
             except Exception as e:
                 self.logger.error(f"Fire temporal verify error: {e}")
 
-        # (c) Strong persistence: hits >= 4 of 5
-        if hits >= 4:
-            return {
-                "confirmed": True,
-                "reason": f"strong_persistence ({hits}/5>=4)",
-                "secondary_score": secondary_score,
-            }
+        # (c) Strong persistence removed — no longer bypasses secondary
+        # Callers must have at least secondary anomaly signal or temporal confirmation.
 
         return {
             "confirmed": False,
@@ -327,6 +322,7 @@ class AlertAggregator:
         if alert_type == "FIRE_SMOKE":
             fire_stage_b = self._fire_two_stage_check(obs, hits, ringbuffer)
             if not fire_stage_b["confirmed"]:
+                self._suppression_counters[f"fire_two_stage:{fire_stage_b['reason']}"] += 1
                 self.logger.debug(
                     f"FIRE_SMOKE K-of-N passed but two-stage REJECTED: {fire_stage_b['reason']}"
                 )
@@ -359,19 +355,24 @@ class AlertAggregator:
             obs.track_id,
         )
 
-        # Optional temporal verification for VIOLENCE / FALL
+        # ── Temporal verification for VIOLENCE / FALL (required for SEVERE) ──
         temporal_result = {"confirmed": None, "score": None}
-        if (
-            alert_type in ("VIOLENCE_FIGHT", "FALL")
-            and self.temporal_verifier is not None
-            and ringbuffer is not None
-        ):
-            try:
-                raw_frames = ringbuffer.get_raw_frames_before(obs.ts_utc, seconds=5.0, max_frames=16)
-                target = "fall" if alert_type == "FALL" else "violence"
-                temporal_result = self.temporal_verifier.verify_clip(raw_frames, target_label=target)
-            except Exception as e:
-                self.logger.error(f"Temporal verify error: {e}")
+        if alert_type in ("VIOLENCE_FIGHT", "FALL"):
+            if (
+                self.temporal_verifier is not None
+                and getattr(self.temporal_verifier, 'available', True)
+                and ringbuffer is not None
+            ):
+                try:
+                    raw_frames = ringbuffer.get_raw_frames_before(obs.ts_utc, seconds=5.0, max_frames=16)
+                    target = "fall" if alert_type == "FALL" else "violence"
+                    temporal_result = self.temporal_verifier.verify_clip(raw_frames, target_label=target)
+                except Exception as e:
+                    self.logger.error(f"Temporal verify error: {e}")
+            else:
+                self.logger.debug(
+                    f"{alert_type} candidate — temporal verifier unavailable, staying MED"
+                )
 
         # Evidence export
         evidence_paths = {"keyframe_path": "", "clip_path": "", "partial_clip": False}
@@ -406,10 +407,27 @@ class AlertAggregator:
             elif obs.track_id is not None:
                 identity_match = self._lookup_identity(obs.camera_id, obs.track_id)
             if identity_match is not None:
+                eid = identity_match.get("entity_id")
+                ename = identity_match.get("name")
+                ecat = identity_match.get("category")
+
+                # Fallback name resolution from entity store
+                if eid and not ename and self._identity_store is not None:
+                    try:
+                        rec = self._identity_store.get_entity(eid)
+                        if rec is not None:
+                            ename = rec.get("name")
+                    except Exception:
+                        pass
+
+                # Validate category
+                if _IDENTITY_AVAILABLE and ecat:
+                    ecat = EntityCategory.validate(ecat)
+
                 entity_dict = {
-                    "id": identity_match.get("entity_id"),
-                    "name": identity_match.get("name"),
-                    "category": identity_match.get("category"),
+                    "id": eid,
+                    "name": ename,
+                    "category": ecat,
                     "confidence": identity_match.get("confidence", 0.0),
                 }
                 # §6.1 — identity evidence in alert payload
@@ -424,8 +442,25 @@ class AlertAggregator:
         if identity_evidence:
             debug_info["identity"] = identity_evidence
 
-        # ── Apply identity policy (severity override / suppression) ───
+        # ── Determine severity ────────────────────────────────────────
         base_severity = ALERT_SEVERITY.get(alert_type, "HIGH")
+
+        # §3 — Temporal-confirmed VIOLENCE/FALL upgrade to SEVERE
+        reason_fired_parts = [f"k_of_n ({hits}/{self.n})"]
+        if alert_type in ("VIOLENCE_FIGHT", "FALL"):
+            if temporal_result.get("confirmed"):
+                base_severity = "SEVERE"
+                reason_fired_parts.append(
+                    f"temporal_confirmed (score={temporal_result.get('score', 0):.2f})"
+                )
+            else:
+                reason_fired_parts.append("temporal_not_confirmed — severity stays MED")
+        elif alert_type == "FIRE_SMOKE" and fire_stage_b:
+            reason_fired_parts.append(f"fire_two_stage: {fire_stage_b.get('reason', '')}")
+
+        debug_info["reason_fired"] = " | ".join(reason_fired_parts)
+
+        # ── Apply identity policy (severity override / suppression) ───
         if self._identity_enabled and self._identity_policy is not None and _IDENTITY_AVAILABLE:
             id_match_obj = None
             if identity_match is not None:
@@ -517,8 +552,16 @@ class AlertAggregator:
     def get_diagnostics(self) -> Dict[str, Any]:
         """Return suppression counters, motion stats, temporal verifier stats."""
         tv_stats = {}
-        if self.temporal_verifier is not None and hasattr(self.temporal_verifier, "get_last_run_stats"):
-            tv_stats = self.temporal_verifier.get_last_run_stats()
+        if self.temporal_verifier is not None:
+            if hasattr(self.temporal_verifier, "get_last_run_stats"):
+                tv_stats = self.temporal_verifier.get_last_run_stats()
+            # Always include availability status
+            tv_stats["available"] = getattr(self.temporal_verifier, "available", True)
+            tv_stats["reason_unavailable"] = getattr(
+                self.temporal_verifier, "reason_unavailable", None
+            )
+        else:
+            tv_stats = {"available": False, "reason_unavailable": "temporal_verifier not attached"}
 
         return {
             "suppression_counters": dict(self._suppression_counters),
@@ -575,6 +618,10 @@ class AlertAggregator:
             if not has_zone_activity:
                 return "zone_aware_no_zone_activity"
 
+        # Low-confidence anomaly signals: suppress scores < 0.4
+        if obs.score < 0.4:
+            return f"low_anomaly_score ({obs.score:.2f}<0.40)"
+
         dets = self._recent_detections.get(obs.camera_id, [])
         if not dets:
             return None
@@ -603,7 +650,8 @@ class AlertAggregator:
                 benign_count += 1
 
         # Suppress if majority of recent detections are benign
-        if benign_count >= len(recent) * 0.5 and benign_count >= 2:
+        # §3 tightened: 40% instead of 50%, minimum 2
+        if benign_count >= len(recent) * 0.4 and benign_count >= 2:
             return f"motion_explained_by_benign ({benign_count}/{len(recent)} benign: {','.join(set(known_names)) or 'common_objects'})"
 
         return None

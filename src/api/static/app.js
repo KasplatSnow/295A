@@ -211,10 +211,10 @@ function renderAlerts() {
         // Entity identity badge (name + category + confidence)
         const ent = alert.entity || {};
         let entityHtml = "";
-        if (ent.id) {
+        if (ent.id || ent.category) {
             const ekind = (ent.category || "").startsWith("UNKNOWN") ? "unknown" : "known";
-            const eName = ent.name || ent.category || "Entity";
-            const eCat = ent.category || "";
+            const eName = ent.name || (ent.id ? ent.category : "Unidentified");
+            const eCat = ent.category || "UNKNOWN";
             const eConf = ((ent.confidence || 0) * 100).toFixed(0);
             entityHtml = `<div><span class="entity-badge ${ekind}">${eName} &middot; ${eCat} &middot; ${eConf}%</span></div>`;
         }
@@ -364,15 +364,16 @@ function showAlertDetails(index) {
                 ${p.zone_name ? `<div><strong>Zone:</strong> ${p.zone_name}</div>` : ""}
                 ${p.track_id ? `<div><strong>Track ID:</strong> ${p.track_id}</div>` : ""}
                 ${p.bboxes ? `<div><strong>Bboxes:</strong> ${JSON.stringify(p.bboxes)}</div>` : ""}
+                ${alert.debug && alert.debug.reason_fired ? `<div><strong>Reason Fired:</strong> <span style="color:#FF9800">${alert.debug.reason_fired}</span></div>` : ""}
             </div>
         </div>
-        ${(() => { const e = alert.entity || {}; if (!e.id) return ""; return `
+        ${(() => { const e = alert.entity || {}; if (!e.id && !e.category) return ""; return `
         <div class="modal-section">
             <h3>Identity</h3>
             <div class="detail-grid">
-                <div><strong>Entity ID:</strong> ${e.id}</div>
+                <div><strong>Entity ID:</strong> ${e.id || "N/A"}</div>
                 <div><strong>Name:</strong> ${e.name || "N/A"}</div>
-                <div><strong>Category:</strong> ${e.category || "N/A"}</div>
+                <div><strong>Category:</strong> ${e.category || "UNKNOWN"}</div>
                 <div><strong>Match Confidence:</strong> ${((e.confidence || 0) * 100).toFixed(1)}%</div>
             </div>
         </div>`; })()}
@@ -1200,16 +1201,23 @@ function renderDiagnostics(data) {
 
     // Temporal verifier stats
     const tv = data.temporal_verifier_stats || {};
+    const tvAvailable = tv.available != null ? tv.available : null;
+    const tvAvailColor = tvAvailable === true ? "#4CAF50" : tvAvailable === false ? "#F44336" : "#FF9800";
+    const tvAvailText = tvAvailable === true ? "AVAILABLE" : tvAvailable === false ? "UNAVAILABLE" : "UNKNOWN";
     html += `<div style="background:#1a1a3a;border:1px solid #2d2d5e;border-radius:8px;padding:16px;margin-bottom:14px">
         <h3 style="color:#9C27B0;font-size:14px;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">Temporal Verifier</h3>`;
-    if (Object.keys(tv).length === 0) {
-        html += '<div style="color:#555">No temporal verifier stats available yet.</div>';
+    html += `<div style="margin-bottom:8px">Status: <strong style="color:${tvAvailColor}">${tvAvailText}</strong></div>`;
+    if (tv.reason_unavailable) {
+        html += `<div style="margin-bottom:8px;color:#F44336">Reason: ${tv.reason_unavailable}</div>`;
+    }
+    if (Object.keys(tv).length <= 2 && !tv.last_run_ts) {
+        html += '<div style="color:#555">No temporal verifier run stats yet (runs on-demand only).</div>';
     } else {
+        html += `<div>Stub Mode: <strong style="color:#e0e0e0">${tv.stub != null ? tv.stub : "N/A"}</strong></div>`;
+        html += `<div>Device: <strong style="color:#e0e0e0">${tv.device || "N/A"}</strong></div>`;
         html += `<div>Input Shape: <strong style="color:#e0e0e0">${tv.last_input_shape || "N/A"}</strong></div>`;
         html += `<div>Padding Applied: <strong style="color:#e0e0e0">${tv.padding_applied != null ? tv.padding_applied : "N/A"}</strong></div>`;
-        html += `<div>Device: <strong style="color:#e0e0e0">${tv.device || "N/A"}</strong></div>`;
         html += `<div>Last Run: <strong style="color:#e0e0e0">${tv.last_run_ts || "N/A"}</strong></div>`;
-        html += `<div>Stub Mode: <strong style="color:#e0e0e0">${tv.stub != null ? tv.stub : "N/A"}</strong></div>`;
     }
     html += '</div>';
 

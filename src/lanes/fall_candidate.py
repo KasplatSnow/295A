@@ -154,7 +154,7 @@ class FallCandidateLane(BaseLane):
         # Update history
         self._prev_persons = curr_persons
 
-        trigger = best_fall_score > 0.3  # Low threshold for candidate
+        trigger = best_fall_score > 0.45  # §3 tightened from 0.3 to reduce FPs
         return Observation(
             ts_utc=ts_utc,
             camera_id=self.camera_id,

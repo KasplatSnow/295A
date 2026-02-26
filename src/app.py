@@ -523,7 +523,7 @@ class CCTVAIModule:
                     "match_threshold_sim": face_thresh,
                     "top2_margin": face_margin,
                 }
-                self.identity_stabilizer = IdentityStabilizer(stabilizer_cfg)
+                self.identity_stabilizer = IdentityStabilizer(stabilizer_cfg, entity_store=self.entity_store)
 
                 policy_cfg = self.config.load_policy()
                 self.identity_policy = IdentityPolicy(policy_cfg)

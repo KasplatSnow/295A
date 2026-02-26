@@ -37,6 +37,7 @@ class _MatchSample:
 class _TrackState:
     """Per-track identity state."""
     current_entity_id: Optional[str] = None
+    current_entity_name: Optional[str] = None
     current_category: str = "UNKNOWN_PERSON"
     confidence: float = 0.0
     last_update_ts: float = 0.0
@@ -59,7 +60,7 @@ class IdentityStabilizer:
       top2_margin        – per-modality margin threshold
     """
 
-    def __init__(self, cfg: Dict[str, Any]):
+    def __init__(self, cfg: Dict[str, Any], entity_store=None):
         self._history_L = cfg.get("history_L", 7)
         self._accept_M = cfg.get("accept_M", 3)
         self._lock_s = cfg.get("lock_s", 8.0)
@@ -73,6 +74,9 @@ class IdentityStabilizer:
         self._override_sim_bonus = 0.10   # extra sim above threshold
         self._override_margin_bonus = 0.05  # extra margin
 
+        # Entity store for name lookups
+        self._entity_store = entity_store
+
         # State: (camera_id, track_id) → _TrackState
         self._tracks: Dict[Tuple[str, int], _TrackState] = {}
 
@@ -82,6 +86,21 @@ class IdentityStabilizer:
         )
 
     # ── Public API ────────────────────────────────────────────────────
+
+    def _resolve_name(self, entity_id: Optional[str], fallback_name: Optional[str] = None) -> Optional[str]:
+        """Look up entity name from store, falling back to provided name."""
+        if entity_id is None:
+            return None
+        if fallback_name:
+            return fallback_name
+        if self._entity_store is not None:
+            try:
+                rec = self._entity_store.get_entity(entity_id)
+                if rec is not None:
+                    return rec.get("name")
+            except Exception:
+                pass
+        return None
 
     def update(
         self,
@@ -93,6 +112,7 @@ class IdentityStabilizer:
         margin: float,
         quality_ok: bool,
         category_hint: str = "UNKNOWN_PERSON",
+        entity_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Feed one observation and receive the stabilized identity.
@@ -138,6 +158,7 @@ class IdentityStabilizer:
                         f"(sim={best_sim:.3f}, margin={margin:.3f})"
                     )
                     state.current_entity_id = sample.entity_id
+                    state.current_entity_name = self._resolve_name(sample.entity_id, entity_name)
                     state.confidence = min(best_sim, 1.0)
                     state.locked_until_ts = now + self._lock_s
                     state.current_category = self._known_category(category_hint)
@@ -153,6 +174,7 @@ class IdentityStabilizer:
                 # No lock or first assignment — apply M-of-L confirmation
                 if self._check_m_of_l(state, sample.entity_id):
                     state.current_entity_id = sample.entity_id
+                    state.current_entity_name = self._resolve_name(sample.entity_id, entity_name)
                     state.confidence = min(best_sim, 1.0)
                     state.locked_until_ts = now + self._lock_s
                     state.current_category = self._known_category(category_hint)
@@ -171,6 +193,7 @@ class IdentityStabilizer:
                     last_good_ts = self._last_good_ts(state)
                     if last_good_ts > 0 and (now - last_good_ts) > self._unknown_grace_s:
                         state.current_entity_id = None
+                        state.current_entity_name = None
                         state.confidence = 0.0
                         state.current_category = self._unknown_category(category_hint)
                         logger.debug(
@@ -180,6 +203,7 @@ class IdentityStabilizer:
 
         return {
             "entity_id": state.current_entity_id,
+            "name": state.current_entity_name,
             "category": state.current_category,
             "confidence": round(state.confidence, 4),
             "locked": now < state.locked_until_ts,
@@ -197,6 +221,7 @@ class IdentityStabilizer:
             results.append({
                 "track_id": tid,
                 "entity_id": state.current_entity_id,
+                "name": state.current_entity_name,
                 "category": state.current_category,
                 "confidence": round(state.confidence, 4),
                 "locked": now < state.locked_until_ts,

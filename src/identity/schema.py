@@ -14,6 +14,23 @@ class EntityCategory:
     PET = "PET"
     UNKNOWN_ANIMAL = "UNKNOWN_ANIMAL"
 
+    _ALL = {"KNOWN_PERSON", "UNKNOWN_PERSON", "PET", "UNKNOWN_ANIMAL"}
+
+    @classmethod
+    def validate(cls, value: str) -> str:
+        """Return canonical category. Normalizes common variants."""
+        if value in cls._ALL:
+            return value
+        upper = value.upper().replace(" ", "_")
+        if upper in cls._ALL:
+            return upper
+        # Fallback mapping for safety
+        if "PERSON" in upper and "UNKNOWN" not in upper:
+            return cls.KNOWN_PERSON
+        if "ANIMAL" in upper or "PET" in upper:
+            return cls.PET
+        return cls.UNKNOWN_PERSON
+
 
 class EntityRole:
     OWNER = "OWNER"
@@ -52,6 +69,10 @@ class IdentityMatch:
     second_sim: float = 0.0                 # second-best similarity
     margin: float = 0.0                     # best_sim - second_sim
     quality_ok: bool = True                 # whether input quality passed gating
+
+    def __post_init__(self):
+        # Enforce canonical category
+        self.category = EntityCategory.validate(self.category)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

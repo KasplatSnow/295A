@@ -819,6 +819,58 @@ class AlertServer:
             states = self._identity_stabilizer.get_track_states(camera_id)
             return {"camera_id": camera_id, "tracks": states}
 
+        @self.app.get("/debug/identity_last_match")
+        async def debug_identity_last_match(
+            camera_id: str = Query(...),
+            track_id: int = Query(...),
+        ):
+            """Return raw + stabilized identity info for a specific track.
+            Useful for diagnosing identity display issues."""
+            result: Dict[str, Any] = {
+                "camera_id": camera_id,
+                "track_id": track_id,
+                "raw_cache": None,
+                "stabilized": None,
+                "entity_store_record": None,
+            }
+
+            # Raw identity cache from aggregator
+            if self._aggregator:
+                cache = self._aggregator._identity_cache.get(camera_id, {})
+                raw = cache.get(track_id)
+                if raw:
+                    result["raw_cache"] = raw
+
+            # Stabilized state
+            if self._identity_stabilizer:
+                states = self._identity_stabilizer.get_track_states(camera_id)
+                for s in states:
+                    if s.get("track_id") == track_id:
+                        result["stabilized"] = s
+                        break
+
+            # Entity store record lookup (if there's an entity_id)
+            eid = None
+            if result["stabilized"] and result["stabilized"].get("entity_id"):
+                eid = result["stabilized"]["entity_id"]
+            elif result["raw_cache"] and result["raw_cache"].get("entity_id"):
+                eid = result["raw_cache"]["entity_id"]
+
+            if eid and self._entity_store:
+                try:
+                    rec = self._entity_store.get_entity(eid)
+                    if rec:
+                        result["entity_store_record"] = {
+                            "entity_id": rec.get("entity_id"),
+                            "name": rec.get("name"),
+                            "category": rec.get("category"),
+                            "role": rec.get("role"),
+                        }
+                except Exception:
+                    pass
+
+            return result
+
         # ==============================================================
         # SYSTEM DIAGNOSTICS (spec §6.3)
         # ==============================================================

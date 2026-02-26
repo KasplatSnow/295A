@@ -167,11 +167,12 @@ class EntityIdentityLane(BaseLane):
                     margin=match.margin,
                     quality_ok=match.quality_ok,
                     category_hint=match.category,
+                    entity_name=match.name,
                 )
                 # Override match with stabilized output
                 match = IdentityMatch(
                     entity_id=stab_result["entity_id"],
-                    name=match.name if stab_result["entity_id"] == match.entity_id else None,
+                    name=stab_result.get("name"),
                     category=stab_result["category"],
                     confidence=stab_result["confidence"],
                     score=match.score,
