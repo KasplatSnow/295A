@@ -35,6 +35,15 @@ _ULTRALYTICS_AUTO = {
     "rtdetr-l.pt", "rtdetr-x.pt", "rtdetr-s.pt",
 }
 
+# RTDETRv2 official weights that can be auto-downloaded from GitHub
+_RTDETRV2_WEIGHTS = {
+    "rtdetrv2_r18vd_120e_coco_from_paddle.pth":  "https://github.com/lyuwenyu/storage/releases/download/v0.1/rtdetrv2_r18vd_120e_coco_from_paddle.pth",
+    "rtdetrv2_r34vd_120e_coco_from_paddle.pth":  "https://github.com/lyuwenyu/storage/releases/download/v0.1/rtdetrv2_r34vd_120e_coco_from_paddle.pth",
+    "rtdetrv2_r50vd_6x_coco_from_paddle.pth":    "https://github.com/lyuwenyu/storage/releases/download/v0.1/rtdetrv2_r50vd_6x_coco_from_paddle.pth",
+    "rtdetrv2_r50vd_m_7x_coco_from_paddle.pth":  "https://github.com/lyuwenyu/storage/releases/download/v0.1/rtdetrv2_r50vd_m_7x_coco_from_paddle.pth",
+    "rtdetrv2_r101vd_6x_coco_from_paddle.pth":   "https://github.com/lyuwenyu/storage/releases/download/v0.1/rtdetrv2_r101vd_6x_coco_from_paddle.pth",
+}
+
 # Project root = ai_module/
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -232,6 +241,35 @@ class Doctor:
             return None
 
     @classmethod
+    def _try_rtdetrv2_fetch(cls, weight_name: str, report: DoctorReport) -> Optional[str]:
+        """Auto-download official RTDETRv2 weights from GitHub releases."""
+        basename = Path(weight_name).name
+        url = _RTDETRV2_WEIGHTS.get(basename)
+        if not url:
+            return None
+
+        models_dir = PROJECT_ROOT / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        dest = models_dir / basename
+
+        if dest.exists():
+            report.resolved_paths[f"rtdetrv2:{basename}"] = str(dest)
+            return str(dest)
+
+        try:
+            import urllib.request
+            logger.info(f"Downloading RTDETRv2 weights: {basename} from GitHub …")
+            urllib.request.urlretrieve(url, str(dest))
+            report.auto_fetched.append(f"rtdetrv2:{basename}")
+            logger.info(f"RTDETRv2 weights downloaded → {dest}")
+            return str(dest)
+        except Exception as e:
+            logger.warning(f"RTDETRv2 auto-download failed for {basename}: {e}")
+            if dest.exists():
+                dest.unlink()  # remove partial download
+            return None
+
+    @classmethod
     def _try_git_clone(cls, repo_url: str, repo_dir: str,
                        report: DoctorReport) -> Optional[str]:
         """Shallow-clone a git repo if repo_url is provided."""
@@ -274,7 +312,8 @@ class Doctor:
 
         # ── Map of config_key → (path_field, is_required) ──
         path_entries = [
-            ("models.rt_detr", "weights", False),
+            ("models.rt_detr", "native_weights", False),   # RTDETRv2 .pth (new primary)
+            ("models.rt_detr", "weights", False),           # legacy .pt fallback
             ("models.yolov8", "weights", False),
             ("models.fire_smoke", "weights", False),
             ("models.weapon_yolo", "weights", False),
@@ -309,6 +348,12 @@ class Doctor:
 
             # 2. Try Ultralytics auto-download
             fetched = cls._try_ultralytics_fetch(raw_path, report)
+            if fetched:
+                section[path_field] = fetched
+                continue
+
+            # 2b. Try RTDETRv2 auto-download from GitHub releases
+            fetched = cls._try_rtdetrv2_fetch(raw_path, report)
             if fetched:
                 section[path_field] = fetched
                 continue

@@ -186,12 +186,164 @@ class ONNXEngine(DetectorEngine):
         return detections
 
 
+# ── COCO-80 class names (for native RTDETRv2 which outputs integer labels) ──
+_COCO_80_NAMES = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
+    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
+    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep",
+    "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella",
+    "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard",
+    "sports ball", "kite", "baseball bat", "baseball glove", "skateboard",
+    "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork",
+    "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
+    "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+    "couch", "potted plant", "bed", "dining table", "toilet", "tv",
+    "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave",
+    "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
+    "scissors", "teddy bear", "hair drier", "toothbrush",
+]
+
+
 # ---------------------------------------------------------------------------
-# Ultralytics RTDETR Engine  ← Phase-1 default
+# RTDETRv2 Native Engine (official repo via torch.hub) — NEW DEFAULT
+# ---------------------------------------------------------------------------
+
+class RTDETRv2NativeEngine(DetectorEngine):
+    """
+    RTDETRv2 loaded via ``torch.hub.load('lyuwenyu/RT-DETR', ...)``.
+
+    Supports ResNet-18/34/50/101vd backbones.  Downloads the model code
+    from GitHub on first run (cached in ``~/.cache/torch/hub/``).
+
+    Weights: .pth checkpoint from
+      https://github.com/lyuwenyu/storage/releases/download/v0.1/
+    """
+
+    # Map config name → torch.hub entry-point
+    _HUB_MODELS = {
+        "rtdetrv2_r18vd": "rtdetrv2_r18vd",
+        "rtdetrv2_r34vd": "rtdetrv2_r34vd",
+        "rtdetrv2_r50vd": "rtdetrv2_r50vd",
+        "rtdetrv2_r50vd_m": "rtdetrv2_r50vd_m",
+        "rtdetrv2_r101vd": "rtdetrv2_r101vd",
+    }
+
+    def __init__(self, weights: str, score_threshold: float = 0.15,
+                 device: str = "cpu", hub_variant: str = "rtdetrv2_r101vd"):
+        super().__init__(runtime="rtdetrv2_native")
+        self.weights = weights
+        self.score_threshold = score_threshold
+        self.device = device
+        self._hub_variant = hub_variant
+        self._model = None
+        self._torch_device = device
+        self._input_size = (640, 640)
+        self._load()
+
+    def _load(self):
+        import torch
+        try:
+            hub_fn = self._HUB_MODELS.get(self._hub_variant, "rtdetrv2_r101vd")
+            self._logger.info(
+                f"Loading RTDETRv2 via torch.hub  variant={hub_fn}  "
+                f"weights={self.weights}  device={self.device}"
+            )
+
+            # Load architecture from official repo (cached after first download)
+            model = torch.hub.load(
+                'lyuwenyu/RT-DETR', hub_fn,
+                pretrained=False,   # we'll load our own checkpoint
+                source='github',
+            )
+
+            # Load checkpoint
+            ckpt = torch.load(self.weights, map_location='cpu')
+            # Official checkpoints store state under 'ema' → 'module'
+            if 'ema' in ckpt and 'module' in ckpt['ema']:
+                state = ckpt['ema']['module']
+            elif 'model' in ckpt:
+                state = ckpt['model']
+            else:
+                state = ckpt
+            model.load_state_dict(state, strict=False)
+
+            model = model.eval().to(self.device)
+            self._model = model
+            self._logger.info(
+                f"RTDETRv2 ({hub_fn}) loaded on {self.device}"
+            )
+        except Exception as e:
+            self._logger.error(f"RTDETRv2 native load failed: {e}")
+            raise
+
+    def infer(self, frame_bgr: np.ndarray) -> List[Detection]:
+        if self._model is None:
+            return []
+        import torch
+        import cv2
+        try:
+            h_orig, w_orig = frame_bgr.shape[:2]
+
+            # Pre-process: resize → RGB → float32 [0,1] → CHW → batch
+            img = cv2.resize(frame_bgr, self._input_size)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = img.astype(np.float32) / 255.0
+            img = img.transpose(2, 0, 1)  # HWC → CHW
+            tensor = torch.from_numpy(img).unsqueeze(0).to(self._torch_device)
+
+            # Some RTDETRv2 hub models expect `orig_target_sizes` for box rescaling
+            orig_sizes = torch.tensor([[h_orig, w_orig]], device=self._torch_device)
+
+            with torch.no_grad():
+                outputs = self._model(tensor, orig_target_sizes=orig_sizes)
+
+            detections: List[Detection] = []
+
+            # Official output: dict with 'labels', 'boxes', 'scores'
+            if isinstance(outputs, dict):
+                labels = outputs['labels'][0].cpu().numpy()
+                boxes = outputs['boxes'][0].cpu().numpy()    # [N, 4] xyxy in orig scale
+                scores = outputs['scores'][0].cpu().numpy()
+            elif isinstance(outputs, (list, tuple)):
+                # Some hub versions return (logits, boxes) tuple
+                logits, raw_boxes = outputs
+                scores_t = torch.sigmoid(logits[0]).cpu()
+                raw_boxes = raw_boxes[0].cpu()
+                # Per-class max
+                max_scores, labels_t = scores_t.max(dim=-1)
+                scores = max_scores.numpy()
+                labels = labels_t.numpy()
+                # boxes are cxcywh normalised → xyxy in orig scale
+                cx, cy, bw, bh = raw_boxes[:, 0], raw_boxes[:, 1], raw_boxes[:, 2], raw_boxes[:, 3]
+                x1 = (cx - bw / 2) * w_orig
+                y1 = (cy - bh / 2) * h_orig
+                x2 = (cx + bw / 2) * w_orig
+                y2 = (cy + bh / 2) * h_orig
+                boxes = torch.stack([x1, y1, x2, y2], dim=-1).numpy()
+            else:
+                return []
+
+            for i in range(len(scores)):
+                s = float(scores[i])
+                if s < self.score_threshold:
+                    continue
+                cls_id = int(labels[i])
+                label = _COCO_80_NAMES[cls_id] if cls_id < len(_COCO_80_NAMES) else f"class_{cls_id}"
+                box = [float(boxes[i][j]) for j in range(4)]
+                detections.append(Detection(box, s, label))
+
+            return detections
+        except Exception as e:
+            self._logger.error(f"RTDETRv2 native infer error: {e}")
+            return []
+
+
+# ---------------------------------------------------------------------------
+# Ultralytics RTDETR Engine  ← legacy fallback
 # ---------------------------------------------------------------------------
 
 class UltralyticsRTDETREngine(DetectorEngine):
-    """Uses ``from ultralytics import RTDETR`` as mandated by spec."""
+    """Uses ``from ultralytics import RTDETR`` — legacy fallback for .pt weights."""
 
     def __init__(self, weights: str, score_threshold: float = 0.15,
                  device: str = "cpu"):
@@ -204,7 +356,7 @@ class UltralyticsRTDETREngine(DetectorEngine):
 
     def _load(self):
         try:
-            from ultralytics import RTDETR          # spec-mandated import
+            from ultralytics import RTDETR
             self._model = RTDETR(self.weights)
             self._logger.info(f"Ultralytics RTDETR loaded: {self.weights}")
         except Exception as e:
@@ -215,7 +367,6 @@ class UltralyticsRTDETREngine(DetectorEngine):
         if self._model is None:
             return []
         try:
-            # Ultralytics requires device= in predict(); .to() alone is insufficient
             ul_device = 0 if self.device.startswith("cuda") else "cpu"
             results = self._model(frame_bgr, conf=self.score_threshold,
                                   device=ul_device, verbose=False)
@@ -336,7 +487,28 @@ def load_detector_engine(models_cfg: Dict[str, Any]) -> DetectorEngine:
         except Exception as e:
             logger.warning(f"ONNX CPU load failed: {e}")
 
-    # 4. Try Ultralytics .pt (Phase-1 default)
+    # 4. Try RTDETRv2 Native (.pth from official repo) — NEW DEFAULT
+    native_weights = rt_detr_cfg.get("native_weights", "")
+    hub_variant = rt_detr_cfg.get("hub_variant", "rtdetrv2_r101vd")
+    if native_weights:
+        native_path = native_weights
+        if not Path(native_path).is_absolute():
+            native_path = str((Path(__file__).parent.parent.parent / native_path).resolve())
+        if Path(native_path).exists():
+            try:
+                engine = RTDETRv2NativeEngine(
+                    native_path, score_threshold, device_str,
+                    hub_variant=hub_variant,
+                )
+                logger.info(f"✅ Loaded RTDETRv2 native ({hub_variant}): {native_path}")
+                _engine_cache[cache_key] = engine
+                return engine
+            except Exception as e:
+                logger.warning(f"RTDETRv2 native load failed, falling back: {e}")
+        else:
+            logger.info(f"RTDETRv2 native weights not found ({native_path}), trying Ultralytics")
+
+    # 5. Try Ultralytics .pt (legacy fallback)
     try:
         engine = UltralyticsRTDETREngine(weights_pt, score_threshold, device_str)
         logger.info(f"✅ Loaded Ultralytics RTDETR (.pt): {weights_pt}")
@@ -345,7 +517,7 @@ def load_detector_engine(models_cfg: Dict[str, Any]) -> DetectorEngine:
     except Exception as e:
         logger.warning(f"Ultralytics RTDETR load failed: {e}")
 
-    # 5. Stub
+    # 6. Stub
     reason = "All RT-DETR backends failed — detector_primary disabled"
     logger.warning(f"⚠️  {reason}")
     return StubEngine(reason)

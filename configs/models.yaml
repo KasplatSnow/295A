@@ -8,10 +8,13 @@ tensorrt:
   fp16: true
 
 models:
-  # PRIMARY DETECTOR: RT-DETR via Ultralytics (Phase-1: .pt)
+  # PRIMARY DETECTOR: RTDETRv2 (R101vd backbone, official checkpoint)
+  # Uses native RTDETRv2 engine via torch.hub; falls back to Ultralytics .pt
   # Spec §2: COCO classes ONLY — do NOT produce fire/weapon from standard COCO model
   rt_detr:
-    weights: "rtdetr-l.pt"
+    native_weights: "models/rtdetrv2_r101vd_6x_coco_from_paddle.pth"   # RTDETRv2 (new)
+    hub_variant: "rtdetrv2_r101vd"                                      # architecture key
+    weights: "rtdetr-l.pt"                                              # legacy fallback
     onnx_path: "models/rt_detr.onnx"
     trt_engine_path: "models/rt_detr.engine"
     score_threshold: 0.25
@@ -20,7 +23,7 @@ models:
   # FALLBACK DETECTOR: YOLOv8 (ultralytics)
   yolov8:
     weights: "models/yolov8n.pt"
-    conf: 0.20
+    conf: 0.25
 
   # FIRE / SMOKE DETECTOR: dedicated model (spec §1)
   # NO FALLBACK — if weights missing, lane is DISABLED
