@@ -52,6 +52,7 @@
         .alert-card.SEVERE{border-left-color:#D32F2F}
         .alert-card.HIGH{border-left-color:#F44336}
         .alert-card.MED{border-left-color:#FF9800}
+        .alert-card.LOW{border-left-color:#4CAF50}
         .alert-top{display:flex;justify-content:space-between;align-items:start;margin-bottom:10px}
         .alert-type-label{font-size:15px;font-weight:bold}
         .alert-type-label.FIRE_SMOKE{color:#F44336}
@@ -68,8 +69,11 @@
         .sev-badge.SEVERE{background:#D32F2F;color:#fff}
         .sev-badge.HIGH{background:#F44336;color:#fff}
         .sev-badge.MED{background:#FF9800;color:#fff}
+        .sev-badge.LOW{background:#4CAF50;color:#fff}
         .alert-body{font-size:13px;color:#bbb;line-height:1.7}
         .alert-body strong{color:#ddd;margin-right:4px}
+        .alert-meta-row{display:flex;gap:14px;flex-wrap:wrap}
+        .alert-time-rel{font-size:11px;color:#666;white-space:nowrap}
         .session-id{font-family:'Courier New',monospace;font-size:11px;color:#7986CB;background:#1a1a3e;padding:2px 6px;border-radius:4px}
         .lane-votes{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
         .lane-vote{font-size:10px;padding:2px 8px;border-radius:10px;background:#2d2d5e;color:#aaa}
@@ -213,6 +217,7 @@
             <div class="stat">Severe: <b id="severe-count" style="color:#D32F2F">0</b></div>
             <div class="stat">High: <b id="high-count" style="color:#F44336">0</b></div>
             <div class="stat">Med: <b id="med-count" style="color:#FF9800">0</b></div>
+            <div class="stat">Low: <b id="low-count" style="color:#4CAF50">0</b></div>
             <div class="stat">WS: <span id="ws-status" style="color:#FF9800">Connecting...</span></div>
         </div>
     </div>
@@ -249,6 +254,7 @@
                         <button class="filter-btn" data-filter="SEVERE">Severe</button>
                         <button class="filter-btn" data-filter="HIGH">High</button>
                         <button class="filter-btn" data-filter="MED">Med</button>
+                        <button class="filter-btn" data-filter="LOW">Low</button>
                     </div>
                 </div>
             </div>

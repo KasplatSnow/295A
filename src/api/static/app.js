@@ -40,6 +40,8 @@ function switchTab(tab) {
         loadEntities();
     } else if (tab === "idlive") {
         populateIdLiveCameras();
+    } else if (tab === "debug") {
+        loadDiagnostics();
     }
 
     // Stop identity live polling when leaving tab
@@ -186,18 +188,20 @@ function renderAlerts() {
         let votesHtml = "";
         if (votes && Array.isArray(votes) && votes.length) {
             votesHtml = `<div class="lane-votes">${votes.map(v => {
-                const pos = v.conf > 0 ? "positive" : "";
-                return `<span class="lane-vote ${pos}">${v.lane} ${(v.conf * 100).toFixed(0)}%</span>`;
+                const s = typeof v.score === "number" ? v.score : 0;
+                const pos = v.trigger ? "positive" : "";
+                return `<span class="lane-vote ${pos}">${v.lane} ${(s * 100).toFixed(0)}%</span>`;
             }).join("")}</div>`;
         }
 
         // Temporal verifier
         const tv = alert.payload && alert.payload.temporal_verifier;
         let tvHtml = "";
-        if (tv && tv.ran) {
+        if (tv && tv.confirmed != null) {
             const cls = tv.confirmed ? "confirmed" : "denied";
             const icon = tv.confirmed ? "&#10003;" : "&#10007;";
-            tvHtml = `<span class="temporal-badge ${cls}">${icon} Temporal ${(tv.score * 100).toFixed(0)}%</span>`;
+            const tvScore = typeof tv.score === "number" ? tv.score : 0;
+            tvHtml = `<span class="temporal-badge ${cls}">${icon} Temporal ${(tvScore * 100).toFixed(0)}%</span>`;
         } else {
             tvHtml = `<span class="temporal-badge na">-- no temporal --</span>`;
         }
@@ -237,19 +241,23 @@ function renderAlerts() {
         <div class="alert-card ${alert.severity}" onclick="showAlertDetails(${realIdx >= 0 ? realIdx : i})">
             <div class="alert-top">
                 <div class="alert-type-label ${typeCls}">${fmtType(alert.type)}</div>
-                <div class="sev-badge ${alert.severity}">${alert.severity}</div>
+                <div style="display:flex;align-items:center;gap:6px">
+                    <div class="sev-badge ${alert.severity}">${alert.severity}</div>
+                    <span class="alert-time-rel" title="${time}">${relativeTime(alert.ts_utc)}</span>
+                </div>
             </div>
             <div class="alert-body">
-                <div><strong>Camera:</strong> ${alert.camera_id}</div>
-                <div><strong>Confidence:</strong> ${(alert.confidence * 100).toFixed(1)}%</div>
-                <div><strong>K-of-N:</strong> ${alert.k_of_n.hits}/${alert.k_of_n.n}</div>
+                <div class="alert-meta-row">
+                    <span><strong>Camera:</strong> ${alert.camera_id}</span>
+                    <span><strong>Conf:</strong> ${(alert.confidence * 100).toFixed(1)}%</span>
+                    <span><strong>K:</strong> ${alert.k_of_n.hits}/${alert.k_of_n.n}</span>
+                </div>
                 ${entityHtml}
                 ${idDebugHtml}
                 ${sessionHtml}
                 <div>${tvHtml}${partialHtml}</div>
                 ${votesHtml}
             </div>
-            <div class="alert-time">${time}</div>
         </div>`;
     }).join("");
 }
@@ -260,10 +268,25 @@ function updateStats() {
     document.getElementById("severe-count").textContent = alerts.filter(a => a.severity === "SEVERE").length;
     document.getElementById("high-count").textContent = alerts.filter(a => a.severity === "HIGH").length;
     document.getElementById("med-count").textContent = alerts.filter(a => a.severity === "MED").length;
+    const lowEl = document.getElementById("low-count");
+    if (lowEl) lowEl.textContent = alerts.filter(a => a.severity === "LOW").length;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 function fmtType(t) { return (t || "UNKNOWN").replace(/_/g, " "); }
+
+function relativeTime(isoStr) {
+    const now = Date.now();
+    const then = new Date(isoStr).getTime();
+    const diffS = Math.floor((now - then) / 1000);
+    if (diffS < 5) return "just now";
+    if (diffS < 60) return `${diffS}s ago`;
+    const m = Math.floor(diffS / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return new Date(isoStr).toLocaleDateString();
+}
 
 // ─── Modal Detail View ──────────────────────────────────────────────
 function showAlertDetails(index) {
@@ -310,8 +333,8 @@ function showAlertDetails(index) {
         <div class="modal-section">
             <h3>Lane Votes</h3>
             <table style="width:100%;font-size:13px;color:#bbb;border-collapse:collapse">
-                <tr style="color:#64B5F6;text-align:left"><th style="padding:4px 8px">Lane</th><th style="padding:4px 8px">Confidence</th></tr>
-                ${votes.map(v => `<tr><td style="padding:4px 8px">${v.lane}</td><td style="padding:4px 8px">${(v.conf * 100).toFixed(1)}%</td></tr>`).join("")}
+                <tr style="color:#64B5F6;text-align:left"><th style="padding:4px 8px">Lane</th><th style="padding:4px 8px">Confidence</th><th style="padding:4px 8px">Trigger</th></tr>
+                ${votes.map(v => { const s = typeof v.score === "number" ? v.score : 0; return `<tr><td style="padding:4px 8px">${v.lane}</td><td style="padding:4px 8px">${(s * 100).toFixed(1)}%</td><td style="padding:4px 8px;color:${v.trigger ? '#4CAF50' : '#F44336'}">${v.trigger ? 'YES' : 'NO'}</td></tr>`; }).join("")}
             </table>
         </div>`;
     }
@@ -319,13 +342,14 @@ function showAlertDetails(index) {
     // Temporal verifier section
     const tv = p.temporal_verifier || {};
     let tvSection = "";
-    if (tv.ran) {
+    if (tv.confirmed != null) {
+        const tvScore = typeof tv.score === "number" ? tv.score : 0;
         tvSection = `
         <div class="modal-section">
             <h3>Temporal Verifier</h3>
             <div class="detail-grid">
-                <div><strong>Confirmed:</strong> ${tv.confirmed ? "Yes" : "No"}</div>
-                <div><strong>Score:</strong> ${(tv.score * 100).toFixed(1)}%</div>
+                <div><strong>Confirmed:</strong> <span style="color:${tv.confirmed ? '#4CAF50' : '#F44336'}">${tv.confirmed ? "Yes" : "No"}</span></div>
+                <div><strong>Score:</strong> ${(tvScore * 100).toFixed(1)}%</div>
             </div>
         </div>`;
     }
