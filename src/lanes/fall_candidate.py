@@ -20,6 +20,7 @@ from .base import BaseLane
 from ..common.types import Observation
 from ..common.log import setup_logger
 from ..runtime.device import select_device
+from ..logic.detection_cache import FrameDetectionCache
 
 
 class FallCandidateLane(BaseLane):
@@ -44,6 +45,13 @@ class FallCandidateLane(BaseLane):
 
         # History for person tracking
         self._prev_persons: List[Tuple[List[int], float]] = []  # [(bbox, conf), ...]
+
+        # Shared detection cache (set by app.py) — avoids duplicate YOLO pass
+        self._det_cache: Optional[FrameDetectionCache] = None
+        self._frame_seq: int = 0
+
+    def set_detection_cache(self, cache: FrameDetectionCache) -> None:
+        self._det_cache = cache
 
     # ------------------------------------------------------------------
     def init(self):
@@ -70,11 +78,12 @@ class FallCandidateLane(BaseLane):
         self.logger.info(f"Fall candidate inference device: {actual_device}")
 
     # ------------------------------------------------------------------
-    def infer(self, frame_bgr: np.ndarray, ts_utc: str) -> Observation:
+    def infer(self, frame_bgr: np.ndarray, ts_utc: str,
+              frame_seq: int = 0) -> Observation:
         if not self._initialized:
             self.init()
 
-        if self.model is None:
+        if self.model is None and self._det_cache is None:
             return Observation(
                 ts_utc=ts_utc, camera_id=self.camera_id, lane=self.lane_name,
                 score=0.0, trigger=False, label=None,
@@ -83,18 +92,30 @@ class FallCandidateLane(BaseLane):
 
         t0 = time.perf_counter()
 
-        # Detect persons (class 0 = person in COCO)
-        results = self.model(frame_bgr, verbose=False, conf=self.conf_threshold,
-                            classes=[0], device=self._ul_device)
-        dt = time.perf_counter() - t0
-
+        # ── Try shared cache first (avoids redundant YOLO pass) ───────
         curr_persons: List[Tuple[List[int], float]] = []
-        if results and results[0].boxes is not None:
-            boxes = results[0].boxes
-            for i in range(len(boxes)):
-                box = boxes.xyxy[i].cpu().numpy().tolist()
-                conf = float(boxes.conf[i])
-                curr_persons.append(([int(c) for c in box], conf))
+        cached = None
+        if self._det_cache is not None and frame_seq > 0:
+            cached = self._det_cache.get("person_yolo", frame_seq)
+
+        if cached is not None:
+            # Cache hit — reuse person boxes from yolov8_fallback
+            curr_persons = cached
+        elif self.model is not None:
+            # Cache miss — run own YOLO (fallback)
+            results = self.model(
+                frame_bgr, verbose=False, conf=self.conf_threshold,
+                classes=[0], device=self._ul_device,
+                half=isinstance(self._ul_device, int),
+            )
+            if results and results[0].boxes is not None:
+                boxes = results[0].boxes
+                all_xyxy = boxes.xyxy.cpu().numpy()
+                all_conf = boxes.conf.cpu().numpy()
+                for i in range(len(boxes)):
+                    box = [int(c) for c in all_xyxy[i].tolist()]
+                    curr_persons.append((box, float(all_conf[i])))
+        dt = time.perf_counter() - t0
 
         # --- Fall heuristics ---
         best_fall_score = 0.0

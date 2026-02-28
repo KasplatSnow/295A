@@ -155,12 +155,15 @@ class FireSmokeYOLOLane(BaseLane):
         if results and results[0].boxes is not None:
             boxes = results[0].boxes
             names = results[0].names  # class-id → name mapping
+            # Batch GPU→CPU transfer (single memcpy)
+            all_xyxy = boxes.xyxy.cpu().numpy()
+            all_conf_arr = boxes.conf.cpu().numpy()
+            all_cls_arr = boxes.cls.cpu().numpy()
             for i in range(len(boxes)):
-                conf = float(boxes.conf[i])
-                cls_id = int(boxes.cls[i])
+                conf = float(all_conf_arr[i])
+                cls_id = int(all_cls_arr[i])
                 cls_name = names.get(cls_id, f"class_{cls_id}").lower()
-                box = boxes.xyxy[i].cpu().numpy().tolist()
-                bbox = [int(c) for c in box]
+                bbox = [int(c) for c in all_xyxy[i].tolist()]
                 area = max(0, (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]))
                 area_ratio = area / max(frame_area, 1)
 

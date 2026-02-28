@@ -11,7 +11,7 @@ import argparse
 import time
 import threading
 import asyncio
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import ThreadPoolExecutor, Future, as_completed
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import sys
@@ -64,6 +64,7 @@ from src.identity.policy import IdentityPolicy
 # Logic
 from src.logic.aggregator import AlertAggregator
 from src.logic.engine_loader import load_detector_engine
+from src.logic.detection_cache import FrameDetectionCache
 
 # Runtime
 from src.runtime.gpu_scheduler import GPUScheduler
@@ -185,6 +186,14 @@ class CameraProcessor:
             thread_name_prefix="lane",
         )
 
+        # Shared detection cache (avoids duplicate YOLO person forward passes)
+        self._det_cache = FrameDetectionCache()
+        self._wire_detection_cache()
+
+        # yolov8_fallback conditional mode — skip when RT-DETR found detections
+        self._fallback_conditional = True
+        self._last_rtdetr_had_dets = False
+
         # Control
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -293,6 +302,14 @@ class CameraProcessor:
         return {name: hz for name in self.lanes}
 
     # ------------------------------------------------------------------
+    def _wire_detection_cache(self):
+        """Inject shared detection cache into lanes that support it."""
+        for lane_name, lane in self.lanes.items():
+            if hasattr(lane, "set_detection_cache"):
+                lane.set_detection_cache(self._det_cache)
+                self.logger.debug(f"Wired detection cache → {lane_name}")
+
+    # ------------------------------------------------------------------
     def start(self):
         if self._running:
             return
@@ -317,32 +334,53 @@ class CameraProcessor:
         # Per-lane last-run timestamps for independent cadence
         lane_last_run: Dict[str, float] = {}
         frame_count = 0
+        frame_seq = 0           # monotonic frame id for detection cache
         t_start = time.time()
 
-        # Shared frame-event to replace polling sleep when no new frame
-        _new_frame = threading.Event()
+        # Ring buffer insert gating (target ~10 fps for evidence)
+        ring_target_interval = 1.0 / 10.0   # 100 ms
+        last_ring_insert = 0.0
+
+        # GPU lanes eligible for scheduler dispatch
+        _GPU_LANES = frozenset({
+            "rt_detr", "yolov8_fallback", "fire_smoke_yolo",
+            "fire_smoke", "weapon_yolo", "entity_identity",
+        })
 
         while self._running:
             try:
                 frame, ts = self.reader.get_latest()
                 if frame is None:
-                    time.sleep(0.5)
+                    # Wait for new frame from reader (event-driven, no CPU spin)
+                    if hasattr(self.reader, 'wait_for_frame'):
+                        self.reader.wait_for_frame(timeout=0.5)
+                    else:
+                        time.sleep(0.5)
                     continue
 
-                # Ring buffer (no copy needed — ringbuffer keeps its own copy)
-                self.ringbuffer.add_frame(frame, ts)
+                now = time.time()
+                frame_seq += 1
+
+                # ── Gate ring-buffer inserts to ~10 fps ───────────────
+                if now - last_ring_insert >= ring_target_interval:
+                    self.ringbuffer.add_frame(frame, ts)
+                    last_ring_insert = now
 
                 # §2.2 — update shared LatestFrameStore for API capture
                 if self._frame_store is not None:
                     self._frame_store.update(self.camera_id, frame, ts)
-
-                now = time.time()
 
                 # ── Determine which lanes are due this cycle ──────────
                 due_lanes: Dict[str, Any] = {}
                 for lane_name, lane in self.lanes.items():
                     if getattr(lane, "on_demand", False):
                         continue
+
+                    # Conditional fallback: skip yolov8_fallback when RTDETR
+                    # found detections (saves an entire GPU forward pass)
+                    if lane_name == "yolov8_fallback" and self._fallback_conditional:
+                        if self._last_rtdetr_had_dets:
+                            continue
 
                     hz = self._sample_hz_map.get(lane_name, 2.0)
                     if self.auto_throttle and lane_name in ("rt_detr", "yolov8_fallback"):
@@ -355,71 +393,84 @@ class CameraProcessor:
                     lane_last_run[lane_name] = now
                     due_lanes[lane_name] = lane
 
+                # Skip expensive work when nothing is due
+                if not due_lanes:
+                    time.sleep(0.001)
+                    continue
+
                 # ── Dispatch due lanes in PARALLEL via thread pool ────
-                if due_lanes:
-                    futures: Dict[str, Future] = {}
-                    for lane_name, lane in due_lanes.items():
-                        # GPU lanes go through the scheduler; CPU lanes run directly
-                        if self.gpu_scheduler and lane_name in (
-                            "rt_detr", "yolov8_fallback", "fire_smoke_yolo",
-                            "fire_smoke", "weapon_yolo", "entity_identity",
-                        ):
-                            fut = self.gpu_scheduler.submit(
-                                lane_name, self.camera_id,
-                                lane.infer, frame, ts,
-                            )
-                            if fut is not None:
-                                futures[lane_name] = fut
-                            # else: dropped by budget (logged inside scheduler)
-                        else:
-                            futures[lane_name] = self._lane_pool.submit(
-                                lane.infer, frame, ts,
-                            )
+                futures: Dict[str, Future] = {}
+                future_to_lane: Dict[Future, str] = {}
+                for lane_name, lane in due_lanes.items():
+                    # Build lane-specific kwargs
+                    lane_kwargs: Dict[str, Any] = {}
+                    if lane_name in ("yolov8_fallback", "fall_candidate"):
+                        lane_kwargs["frame_seq"] = frame_seq
 
-                    # Collect results (blocks until all finish)
-                    for lane_name, fut in futures.items():
-                        try:
-                            obs = fut.result(timeout=5.0)
-                            if obs is None:
-                                continue
+                    if self.gpu_scheduler and lane_name in _GPU_LANES:
+                        fut = self.gpu_scheduler.submit(
+                            lane_name, self.camera_id,
+                            lane.infer, frame, ts, **lane_kwargs,
+                        )
+                        if fut is not None:
+                            futures[lane_name] = fut
+                            future_to_lane[fut] = lane_name
+                    else:
+                        fut = self._lane_pool.submit(
+                            lane.infer, frame, ts, **lane_kwargs,
+                        )
+                        futures[lane_name] = fut
+                        future_to_lane[fut] = lane_name
 
-                            # Add inference timing
-                            if obs.debug is None:
-                                obs.debug = {}
+                # ── Collect results incrementally via as_completed ─────
+                for fut in as_completed(future_to_lane, timeout=5.0):
+                    lane_name = future_to_lane[fut]
+                    try:
+                        obs = fut.result()
+                        if obs is None:
+                            continue
 
-                            # Update auto-throttle for detector lanes
-                            dt_ms = obs.debug.get("lane_inference_ms") or obs.debug.get("inference_ms", 0)
-                            if self.auto_throttle and lane_name in ("rt_detr", "yolov8_fallback"):
-                                max_hz = self._sample_hz_map.get(lane_name, 2.0)
-                                self.auto_throttle.update(self.camera_id, dt_ms, max_hz)
+                        if obs.debug is None:
+                            obs.debug = {}
 
-                            # AnyAnomaly trigger policy
-                            if lane_name == "anomalyclip" and obs.score > 0:
+                        # Track RT-DETR detection state for conditional fallback
+                        if lane_name == "rt_detr":
+                            num_dets = obs.debug.get("num_detections", 0)
+                            self._last_rtdetr_had_dets = num_dets > 0 or obs.trigger
+
+                        # Update auto-throttle for detector lanes
+                        dt_ms = obs.debug.get("lane_inference_ms") or obs.debug.get("inference_ms", 0)
+                        if self.auto_throttle and lane_name in ("rt_detr", "yolov8_fallback"):
+                            max_hz = self._sample_hz_map.get(lane_name, 2.0)
+                            self.auto_throttle.update(self.camera_id, dt_ms, max_hz)
+
+                        # AnyAnomaly trigger policy
+                        if lane_name == "anomalyclip" and obs.score > 0:
+                            aa_lane = self.lanes.get("anyanomaly")
+                            if aa_lane and hasattr(aa_lane, "arm"):
+                                aa_cfg = self.models_cfg.get("models", {}).get("anyanomaly", {})
+                                candidate_thresh = aa_cfg.get("candidate_threshold", 0.40)
+                                if obs.score >= candidate_thresh:
+                                    aa_lane.arm(reason="anomalyclip_candidate")
+
+                        if lane_name in ("rt_detr", "yolov8_fallback"):
+                            suspicious = {"weapon", "knife", "gun", "fight", "violence"}
+                            if obs.label and obs.label.lower() in suspicious:
                                 aa_lane = self.lanes.get("anyanomaly")
                                 if aa_lane and hasattr(aa_lane, "arm"):
-                                    aa_cfg = self.models_cfg.get("models", {}).get("anyanomaly", {})
-                                    candidate_thresh = aa_cfg.get("candidate_threshold", 0.40)
-                                    if obs.score >= candidate_thresh:
-                                        aa_lane.arm(reason="anomalyclip_candidate")
+                                    aa_lane.arm(reason=f"detector_{obs.label}")
 
-                            if lane_name in ("rt_detr", "yolov8_fallback"):
-                                suspicious = {"weapon", "knife", "gun", "fight", "violence"}
-                                if obs.label and obs.label.lower() in suspicious:
-                                    aa_lane = self.lanes.get("anyanomaly")
-                                    if aa_lane and hasattr(aa_lane, "arm"):
-                                        aa_lane.arm(reason=f"detector_{obs.label}")
+                        alert = self.aggregator.process_observation(
+                            obs,
+                            evidence_request_callback=self._request_evidence_async,
+                            ringbuffer=self.ringbuffer,
+                        )
+                        if alert:
+                            self.stats["last_alert_ts"] = alert.ts_utc
+                            self.logger.info(f"ALERT: {alert.type}")
 
-                            alert = self.aggregator.process_observation(
-                                obs,
-                                evidence_request_callback=self._request_evidence_async,
-                                ringbuffer=self.ringbuffer,
-                            )
-                            if alert:
-                                self.stats["last_alert_ts"] = alert.ts_utc
-                                self.logger.info(f"ALERT: {alert.type}")
-
-                        except Exception as e:
-                            self.logger.error(f"Lane {lane_name} error: {e}")
+                    except Exception as e:
+                        self.logger.error(f"Lane {lane_name} error: {e}")
 
                 frame_count += 1
                 self.stats["frames_processed"] = frame_count
@@ -428,7 +479,7 @@ class CameraProcessor:
                     elapsed = time.time() - t_start
                     self.stats["fps"] = frame_count / max(elapsed, 1)
 
-                # Yield briefly (1 ms) instead of 10 ms to reduce idle latency
+                # Yield briefly — only needed when loop ran faster than source
                 time.sleep(0.001)
 
             except Exception as e:

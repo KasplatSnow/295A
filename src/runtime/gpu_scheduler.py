@@ -17,7 +17,7 @@ Policies:
 import time
 import threading
 import heapq
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 from concurrent.futures import Future
@@ -74,7 +74,7 @@ class GPUScheduler:
 
         gpu_cfg = runtime_cfg.get("gpu", {})
         self.max_queue = gpu_cfg.get("max_queue", 64)
-        self.max_inflight = gpu_cfg.get("max_inflight", 1)
+        self.max_inflight = gpu_cfg.get("max_inflight", 2)   # allow overlap
 
         self.budgets = runtime_cfg.get("budgets", {})
 
@@ -83,6 +83,9 @@ class GPUScheduler:
         self._queue_lock = threading.Lock()
         self._seq = 0
 
+        # Condition variable — replaces polling sleep for zero-latency wakeup
+        self._cond = threading.Condition(self._queue_lock)
+
         # Execution
         self._inflight = 0
         self._inflight_lock = threading.Lock()
@@ -90,7 +93,9 @@ class GPUScheduler:
         self._exec_thread: Optional[threading.Thread] = None
 
         # Per-lane rate tracking: lane → camera_id → deque of timestamps
-        self._run_timestamps: Dict[str, Dict[str, list]] = defaultdict(lambda: defaultdict(list))
+        self._run_timestamps: Dict[str, Dict[str, deque]] = defaultdict(
+            lambda: defaultdict(lambda: deque(maxlen=120))
+        )
 
         # Stats
         self.stats: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
@@ -152,6 +157,7 @@ class GPUScheduler:
                 _seq=self._seq,
             )
             heapq.heappush(self._queue, task)
+            self._cond.notify()   # wake execution loop immediately
 
         return future
 
@@ -166,8 +172,10 @@ class GPUScheduler:
         if max_rpm is not None:
             now = time.time()
             stamps = self._run_timestamps[lane][camera_id]
-            # Clean old timestamps (> 60s ago)
-            stamps[:] = [t for t in stamps if now - t < 60.0]
+            # Pop expired timestamps from front (monotonic order)
+            cutoff = now - 60.0
+            while stamps and stamps[0] < cutoff:
+                stamps.popleft()
             if len(stamps) >= max_rpm:
                 return False
 
@@ -209,10 +217,29 @@ class GPUScheduler:
 
     # ------------------------------------------------------------------
     def _execution_loop(self):
-        """Main GPU execution loop — pops tasks in priority order."""
+        """Main GPU execution loop — pops tasks in priority order.
+
+        Uses a Condition variable for zero-latency wakeup instead of
+        polling sleep.  Supports max_inflight > 1 so multiple CUDA
+        streams can overlap compute and memory transfers.
+        """
         while self._running:
             task = None
-            with self._queue_lock:
+            with self._cond:  # acquires _queue_lock
+                # Wait until there is a task AND an inflight slot
+                while self._running:
+                    can_run = False
+                    if self._queue:
+                        with self._inflight_lock:
+                            if self._inflight < self.max_inflight:
+                                can_run = True
+                    if can_run:
+                        break
+                    self._cond.wait(timeout=0.1)  # re-check periodically
+
+                if not self._running:
+                    break
+
                 if self._queue:
                     with self._inflight_lock:
                         if self._inflight < self.max_inflight:
@@ -220,7 +247,6 @@ class GPUScheduler:
                             self._inflight += 1
 
             if task is None:
-                time.sleep(0.001)  # 1ms poll
                 continue
 
             # Execute
@@ -235,6 +261,9 @@ class GPUScheduler:
                 dt_ms = (time.perf_counter() - t0) * 1000
                 with self._inflight_lock:
                     self._inflight -= 1
+                # Notify waiting threads that a slot freed up
+                with self._cond:
+                    self._cond.notify()
 
                 # Record stats
                 stats = self.stats[task.lane]

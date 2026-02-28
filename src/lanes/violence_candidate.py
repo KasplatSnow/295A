@@ -54,10 +54,18 @@ class ViolenceCandidateLane(BaseLane):
         gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
         motion_energy = 0.0
+        dense_motion_ratio = 0.0
+        diff = None
         if self._prev_gray is not None:
             diff = cv2.absdiff(self._prev_gray, gray)
             motion_energy = float(np.mean(diff)) / 80.0
             motion_energy = min(motion_energy, 1.0)
+
+            # Dense motion: count high-change pixels as fraction of frame
+            _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+            dense_motion_ratio = float(np.sum(thresh > 0)) / max(thresh.size, 1)
+
+        # Update prev AFTER computing diffs (was a bug: set before → absdiff=0)
         self._prev_gray = gray
 
         # --- Motion energy spike detection ---
@@ -68,14 +76,6 @@ class ViolenceCandidateLane(BaseLane):
         # Compute spike: current energy vs rolling average
         avg_energy = np.mean(self._energy_history[:-1]) if len(self._energy_history) > 1 else 0
         spike = motion_energy - avg_energy
-
-        # --- Dense motion region detection (proxy for clustered people fighting) ---
-        # Count high-motion pixels as fraction of frame
-        dense_motion_ratio = 0.0
-        if self._prev_gray is not None:
-            diff = cv2.absdiff(self._prev_gray, gray)
-            _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
-            dense_motion_ratio = float(np.sum(thresh > 0)) / max(thresh.size, 1)
 
         # --- Score: weighted combination ---
         score = 0.6 * motion_energy + 0.3 * min(spike * 2, 1.0) + 0.1 * dense_motion_ratio

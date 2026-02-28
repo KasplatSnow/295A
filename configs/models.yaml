@@ -92,7 +92,7 @@ models:
 
   # §4.2 — Motion gating config for AnomalyCLIP stub mode
   anomaly_stub:
-    min_motion_area_ratio: 0.02       # suppress if motion occupies too little of frame
+    min_motion_area_ratio: 0.015       # suppress if motion occupies too little of frame
     max_global_change_ratio: 0.70     # suppress if entire frame changes (exposure/auto-gain)
     min_persistence_hits: 3           # require 3 of last 6 above threshold
     window_n: 6                       # persistence ring buffer size
@@ -125,7 +125,7 @@ runtime:
     - "./third_party"
   gpu:
     max_queue: 64
-    max_inflight: 1
+    max_inflight: 2          # allow 2 concurrent GPU tasks (overlapping CUDA streams)
   budgets:
     rtdetr:
       max_latency_ms: 120

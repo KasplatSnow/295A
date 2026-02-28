@@ -25,6 +25,9 @@ class OpenCVReader(IngestBackend):
         self._latest_frame = None
         self._latest_ts = None
         self._connected = False
+        self._frame_seq = 0              # monotonic frame counter
+        self._prev_returned_seq = 0      # last seq returned by get_latest
+        self._new_frame = threading.Event()  # signalled on new frame
     
     def start(self):
         """Start the reader thread"""
@@ -49,14 +52,20 @@ class OpenCVReader(IngestBackend):
         """Get the latest frame (non-blocking).
 
         Returns a COPY to avoid race with the reader thread.
-        The reader thread overwrites _latest_frame in-place so the copy
-        here is the only one needed (previously there were 3 copies per
-        frame cycle).
+        Returns (None, None) if no frame or the same frame was already
+        returned (caller should sleep/wait).
         """
         with self._lock:
-            if self._latest_frame is not None:
+            if self._latest_frame is not None and self._frame_seq != self._prev_returned_seq:
+                self._prev_returned_seq = self._frame_seq
                 return self._latest_frame.copy(), self._latest_ts
             return None, None
+
+    def wait_for_frame(self, timeout: float = 0.5) -> bool:
+        """Block until the reader thread has a new frame (or timeout)."""
+        got = self._new_frame.wait(timeout=timeout)
+        self._new_frame.clear()
+        return got
     
     def is_connected(self) -> bool:
         """Check if connected"""
@@ -123,6 +132,8 @@ class OpenCVReader(IngestBackend):
                 with self._lock:
                     self._latest_frame = frame
                     self._latest_ts = now_iso_utc()
+                    self._frame_seq += 1
+                self._new_frame.set()  # wake consumers
                 
                 # Minimal yield — cap.read() itself blocks sufficiently for
                 # RTSP/file sources.  1 ms keeps CPU usage negligible while

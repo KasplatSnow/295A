@@ -129,9 +129,13 @@ class WeaponYOLOLane(BaseLane):
             boxes = results[0].boxes
             names = results[0].names
             num_dets = len(boxes)
+            # Batch GPU→CPU transfer (single memcpy instead of N)
+            all_xyxy = boxes.xyxy.cpu().numpy()
+            all_conf_arr = boxes.conf.cpu().numpy()
+            all_cls_arr = boxes.cls.cpu().numpy()
             for i in range(num_dets):
-                conf = float(boxes.conf[i])
-                cls_id = int(boxes.cls[i])
+                conf = float(all_conf_arr[i])
+                cls_id = int(all_cls_arr[i])
                 cls_name = names.get(cls_id, f"class_{cls_id}").lower()
 
                 # Class filter: only weapon classes (resolved IDs)
@@ -142,8 +146,7 @@ class WeaponYOLOLane(BaseLane):
 
                 if conf > best_score:
                     best_score = conf
-                    box = boxes.xyxy[i].cpu().numpy().tolist()
-                    best_bbox = [int(c) for c in box]
+                    best_bbox = [int(c) for c in all_xyxy[i].tolist()]
                     best_label = cls_name
 
         trigger = best_score > self.conf_threshold and best_label is not None

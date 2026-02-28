@@ -257,12 +257,17 @@ class EntityIdentityLane(BaseLane):
             if len(results) > 0 and results[0].boxes is not None:
                 boxes = results[0].boxes
                 names = results[0].names
+                # Batch GPU→CPU transfer (single memcpy)
+                all_xyxy = boxes.xyxy.cpu().numpy().astype(int)
+                all_conf = boxes.conf.cpu().numpy()
+                all_cls = boxes.cls.cpu().numpy().astype(int)
+                all_ids = boxes.id.cpu().numpy().astype(int) if boxes.id is not None else None
                 for i in range(len(boxes)):
-                    box = boxes.xyxy[i].cpu().numpy().astype(int).tolist()
-                    conf = float(boxes.conf[i])
-                    cls_id = int(boxes.cls[i])
+                    box = all_xyxy[i].tolist()
+                    conf = float(all_conf[i])
+                    cls_id = int(all_cls[i])
                     if cls_id == 0:
-                        track_id = int(boxes.id[i]) if boxes.id is not None else i
+                        track_id = int(all_ids[i]) if all_ids is not None else i
                         persons.append((box, conf, track_id))
                     elif cls_id in _ANIMAL_COCO_IDS:
                         label = names.get(cls_id, f"class_{cls_id}").lower()

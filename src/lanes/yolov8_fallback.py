@@ -7,7 +7,7 @@ Thresholds are intentionally permissive (conf 0.20) to favour recall.
 import time
 import numpy as np
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from ultralytics import YOLO
 
@@ -15,6 +15,7 @@ from .base import BaseLane
 from ..common.types import Observation
 from ..common.log import setup_logger
 from ..runtime.device import select_device
+from ..logic.detection_cache import FrameDetectionCache
 
 
 class YOLOv8FallbackLane(BaseLane):
@@ -26,6 +27,11 @@ class YOLOv8FallbackLane(BaseLane):
         self.model: YOLO = None  # type: ignore
         self.conf_threshold = 0.20
         self.logger = setup_logger(f"YOLOv8Fallback-{camera_id}")
+        # Shared detection cache (set by app.py) — lets fall_candidate skip its own YOLO
+        self._det_cache: Optional[FrameDetectionCache] = None
+
+    def set_detection_cache(self, cache: FrameDetectionCache) -> None:
+        self._det_cache = cache
 
     # ------------------------------------------------------------------
     def init(self):
@@ -53,7 +59,8 @@ class YOLOv8FallbackLane(BaseLane):
         self.logger.info(f"YOLO inference device: {actual_device}")
 
     # ------------------------------------------------------------------
-    def infer(self, frame_bgr: np.ndarray, ts_utc: str) -> Observation:
+    def infer(self, frame_bgr: np.ndarray, ts_utc: str,
+              frame_seq: int = 0) -> Observation:
         if not self._initialized:
             self.init()
 
@@ -69,19 +76,32 @@ class YOLOv8FallbackLane(BaseLane):
         trigger = False
         num_dets = 0
 
+        # Batch GPU→CPU transfer (one memcpy instead of N)
+        person_boxes_for_cache = []  # [(bbox, conf), ...]
         if results and results[0].boxes is not None:
             boxes = results[0].boxes
             num_dets = len(boxes)
             names = results[0].names  # class-id → name
+            all_xyxy = boxes.xyxy.cpu().numpy()
+            all_conf = boxes.conf.cpu().numpy()
+            all_cls = boxes.cls.cpu().numpy()
             for i in range(num_dets):
-                conf = float(boxes.conf[i])
+                conf = float(all_conf[i])
+                cls_id = int(all_cls[i])
+                box = [int(c) for c in all_xyxy[i].tolist()]
+                label = names.get(cls_id, f"class_{cls_id}")
                 if conf > best_score:
                     best_score = conf
-                    box = boxes.xyxy[i].cpu().numpy().tolist()
-                    best_bbox = [int(c) for c in box]
-                    cls_id = int(boxes.cls[i])
-                    best_label = names.get(cls_id, f"class_{cls_id}")
+                    best_bbox = box
+                    best_label = label
                     trigger = True
+                # Collect person detections for cache
+                if cls_id == 0:  # person
+                    person_boxes_for_cache.append((box, conf))
+
+        # Populate shared cache so fall_candidate can skip its own YOLO
+        if self._det_cache is not None and frame_seq > 0:
+            self._det_cache.put("person_yolo", frame_seq, person_boxes_for_cache)
 
         return Observation(
             ts_utc=ts_utc,
