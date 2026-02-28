@@ -17,8 +17,10 @@ models:
     weights: "rtdetr-l.pt"                                              # legacy fallback
     onnx_path: "models/rt_detr.onnx"
     trt_engine_path: "models/rt_detr.engine"
-    score_threshold: 0.25
+    score_threshold: 0.35                                               # tighter than 0.25 → fewer FPs
     class_allowlist: ["person", "car", "truck", "bus", "motorcycle", "bicycle"]
+    use_fp16: true                                                      # FP16 on CUDA (30-50% speedup)
+    use_compile: false                                                  # torch.compile (experimental)
 
   # FALLBACK DETECTOR: YOLOv8 (ultralytics)
   yolov8:

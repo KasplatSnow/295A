@@ -11,6 +11,7 @@ import argparse
 import time
 import threading
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import sys
@@ -175,6 +176,15 @@ class CameraProcessor:
         # Per-lane scheduling
         self._sample_hz_map = self._build_sample_hz_map()
 
+        # Evidence export pool (non-blocking for main processing thread)
+        self._evidence_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="evidence")
+
+        # Lane inference pool (parallel lane dispatch)
+        self._lane_pool = ThreadPoolExecutor(
+            max_workers=min(len(self.lanes) + 1, 6),
+            thread_name_prefix="lane",
+        )
+
         # Control
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -297,6 +307,9 @@ class CameraProcessor:
         self.reader.stop()
         if self._thread:
             self._thread.join(timeout=5.0)
+        # Shutdown thread pools gracefully
+        self._lane_pool.shutdown(wait=False)
+        self._evidence_pool.shutdown(wait=False)
         self.logger.info("Stopped camera processor")
 
     # ------------------------------------------------------------------
@@ -306,6 +319,9 @@ class CameraProcessor:
         frame_count = 0
         t_start = time.time()
 
+        # Shared frame-event to replace polling sleep when no new frame
+        _new_frame = threading.Event()
+
         while self._running:
             try:
                 frame, ts = self.reader.get_latest()
@@ -313,7 +329,7 @@ class CameraProcessor:
                     time.sleep(0.5)
                     continue
 
-                # Ring buffer
+                # Ring buffer (no copy needed — ringbuffer keeps its own copy)
                 self.ringbuffer.add_frame(frame, ts)
 
                 # §2.2 — update shared LatestFrameStore for API capture
@@ -322,14 +338,13 @@ class CameraProcessor:
 
                 now = time.time()
 
+                # ── Determine which lanes are due this cycle ──────────
+                due_lanes: Dict[str, Any] = {}
                 for lane_name, lane in self.lanes.items():
-                    # Skip on-demand lanes (temporal_verifier)
                     if getattr(lane, "on_demand", False):
                         continue
 
                     hz = self._sample_hz_map.get(lane_name, 2.0)
-
-                    # Auto-throttle: adjust detector Hz dynamically
                     if self.auto_throttle and lane_name in ("rt_detr", "yolov8_fallback"):
                         hz = self.auto_throttle.get_effective_hz(self.camera_id)
 
@@ -338,52 +353,73 @@ class CameraProcessor:
                     if now - last < interval:
                         continue
                     lane_last_run[lane_name] = now
+                    due_lanes[lane_name] = lane
 
-                    try:
-                        t0_lane = time.perf_counter()
-                        obs = lane.infer(frame, ts)
-                        dt_lane = time.perf_counter() - t0_lane
-                        dt_ms = dt_lane * 1000
+                # ── Dispatch due lanes in PARALLEL via thread pool ────
+                if due_lanes:
+                    futures: Dict[str, Future] = {}
+                    for lane_name, lane in due_lanes.items():
+                        # GPU lanes go through the scheduler; CPU lanes run directly
+                        if self.gpu_scheduler and lane_name in (
+                            "rt_detr", "yolov8_fallback", "fire_smoke_yolo",
+                            "fire_smoke", "weapon_yolo", "entity_identity",
+                        ):
+                            fut = self.gpu_scheduler.submit(
+                                lane_name, self.camera_id,
+                                lane.infer, frame, ts,
+                            )
+                            if fut is not None:
+                                futures[lane_name] = fut
+                            # else: dropped by budget (logged inside scheduler)
+                        else:
+                            futures[lane_name] = self._lane_pool.submit(
+                                lane.infer, frame, ts,
+                            )
 
-                        # Add inference timing to debug
-                        if obs.debug is None:
-                            obs.debug = {}
-                        obs.debug["lane_inference_ms"] = round(dt_ms, 1)
+                    # Collect results (blocks until all finish)
+                    for lane_name, fut in futures.items():
+                        try:
+                            obs = fut.result(timeout=5.0)
+                            if obs is None:
+                                continue
 
-                        # Update auto-throttle for detector lanes
-                        if self.auto_throttle and lane_name in ("rt_detr", "yolov8_fallback"):
-                            max_hz = self._sample_hz_map.get(lane_name, 2.0)
-                            self.auto_throttle.update(self.camera_id, dt_ms, max_hz)
+                            # Add inference timing
+                            if obs.debug is None:
+                                obs.debug = {}
 
-                        # AnyAnomaly trigger policy:
-                        # Arm AnyAnomaly when anomalyclip crosses candidate threshold
-                        if lane_name == "anomalyclip" and obs.score > 0:
-                            aa_lane = self.lanes.get("anyanomaly")
-                            if aa_lane and hasattr(aa_lane, "arm"):
-                                aa_cfg = self.models_cfg.get("models", {}).get("anyanomaly", {})
-                                candidate_thresh = aa_cfg.get("candidate_threshold", 0.40)
-                                if obs.score >= candidate_thresh:
-                                    aa_lane.arm(reason="anomalyclip_candidate")
+                            # Update auto-throttle for detector lanes
+                            dt_ms = obs.debug.get("lane_inference_ms") or obs.debug.get("inference_ms", 0)
+                            if self.auto_throttle and lane_name in ("rt_detr", "yolov8_fallback"):
+                                max_hz = self._sample_hz_map.get(lane_name, 2.0)
+                                self.auto_throttle.update(self.camera_id, dt_ms, max_hz)
 
-                        # Also arm AnyAnomaly for suspicious detector labels
-                        if lane_name in ("rt_detr", "yolov8_fallback"):
-                            suspicious = {"weapon", "knife", "gun", "fight", "violence"}
-                            if obs.label and obs.label.lower() in suspicious:
+                            # AnyAnomaly trigger policy
+                            if lane_name == "anomalyclip" and obs.score > 0:
                                 aa_lane = self.lanes.get("anyanomaly")
                                 if aa_lane and hasattr(aa_lane, "arm"):
-                                    aa_lane.arm(reason=f"detector_{obs.label}")
+                                    aa_cfg = self.models_cfg.get("models", {}).get("anyanomaly", {})
+                                    candidate_thresh = aa_cfg.get("candidate_threshold", 0.40)
+                                    if obs.score >= candidate_thresh:
+                                        aa_lane.arm(reason="anomalyclip_candidate")
 
-                        alert = self.aggregator.process_observation(
-                            obs,
-                            evidence_request_callback=self._request_evidence,
-                            ringbuffer=self.ringbuffer,
-                        )
+                            if lane_name in ("rt_detr", "yolov8_fallback"):
+                                suspicious = {"weapon", "knife", "gun", "fight", "violence"}
+                                if obs.label and obs.label.lower() in suspicious:
+                                    aa_lane = self.lanes.get("anyanomaly")
+                                    if aa_lane and hasattr(aa_lane, "arm"):
+                                        aa_lane.arm(reason=f"detector_{obs.label}")
 
-                        if alert:
-                            self.stats["last_alert_ts"] = alert.ts_utc
-                            self.logger.info(f"ALERT: {alert.type}")
-                    except Exception as e:
-                        self.logger.error(f"Lane {lane_name} error: {e}")
+                            alert = self.aggregator.process_observation(
+                                obs,
+                                evidence_request_callback=self._request_evidence_async,
+                                ringbuffer=self.ringbuffer,
+                            )
+                            if alert:
+                                self.stats["last_alert_ts"] = alert.ts_utc
+                                self.logger.info(f"ALERT: {alert.type}")
+
+                        except Exception as e:
+                            self.logger.error(f"Lane {lane_name} error: {e}")
 
                 frame_count += 1
                 self.stats["frames_processed"] = frame_count
@@ -392,7 +428,8 @@ class CameraProcessor:
                     elapsed = time.time() - t_start
                     self.stats["fps"] = frame_count / max(elapsed, 1)
 
-                time.sleep(0.01)
+                # Yield briefly (1 ms) instead of 10 ms to reduce idle latency
+                time.sleep(0.001)
 
             except Exception as e:
                 self.logger.error(f"Processing error: {e}")
@@ -410,6 +447,16 @@ class CameraProcessor:
         except Exception as e:
             self.logger.error(f"Evidence export failed: {e}")
             return {"keyframe_path": "", "clip_path": "", "partial_clip": True}
+
+    # ------------------------------------------------------------------
+    def _request_evidence_async(self, camera_id: str, alert_type: str, ts_utc: str) -> Dict[str, object]:
+        """Non-blocking evidence export — dispatches to thread pool.
+
+        Returns a placeholder immediately so the processing loop is not
+        stalled by video encoding + disk I/O.
+        """
+        self._evidence_pool.submit(self._request_evidence, camera_id, alert_type, ts_utc)
+        return {"keyframe_path": "(pending)", "clip_path": "(pending)", "partial_clip": False}
 
     # ------------------------------------------------------------------
     def get_stats(self) -> Dict[str, Any]:

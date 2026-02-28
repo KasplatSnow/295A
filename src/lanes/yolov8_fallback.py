@@ -59,7 +59,8 @@ class YOLOv8FallbackLane(BaseLane):
 
         t0 = time.perf_counter()
         results = self.model(frame_bgr, verbose=False, conf=self.conf_threshold,
-                            device=self._ul_device)
+                            device=self._ul_device,
+                            half=isinstance(self._ul_device, int))  # FP16 on GPU
         dt = time.perf_counter() - t0
 
         best_score = 0.0

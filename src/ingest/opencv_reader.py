@@ -46,7 +46,13 @@ class OpenCVReader(IngestBackend):
         self.logger.info(f"Stopped OpenCV reader for {self.camera_id}")
     
     def get_latest(self) -> Tuple[Optional[np.ndarray], Optional[str]]:
-        """Get the latest frame (non-blocking)"""
+        """Get the latest frame (non-blocking).
+
+        Returns a COPY to avoid race with the reader thread.
+        The reader thread overwrites _latest_frame in-place so the copy
+        here is the only one needed (previously there were 3 copies per
+        frame cycle).
+        """
         with self._lock:
             if self._latest_frame is not None:
                 return self._latest_frame.copy(), self._latest_ts
@@ -112,13 +118,16 @@ class OpenCVReader(IngestBackend):
                     time.sleep(self.reconnect_delay)
                     continue
                 
-                # Update latest frame
+                # Update latest frame — store directly (cap.read() already
+                # returns a fresh array each call, so no copy needed here).
                 with self._lock:
                     self._latest_frame = frame
                     self._latest_ts = now_iso_utc()
                 
-                # Small delay to avoid spinning CPU
-                time.sleep(0.01)
+                # Minimal yield — cap.read() itself blocks sufficiently for
+                # RTSP/file sources.  1 ms keeps CPU usage negligible while
+                # cutting per-frame idle latency vs the former 10 ms sleep.
+                time.sleep(0.001)
                 
             except Exception as e:
                 self.logger.error(f"Read error: {e}")

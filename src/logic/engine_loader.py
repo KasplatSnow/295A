@@ -1,19 +1,23 @@
 """
-Engine loader — cascade: TensorRT FP16 → ONNX GPU → ONNX CPU → Ultralytics .pt → Stub
+Engine loader — cascade: TensorRT FP16 → ONNX GPU → ONNX CPU → RTDETRv2 Native → Ultralytics .pt → Stub
 
 Provides a uniform ``DetectorEngine.infer(frame_bgr) → List[Detection]`` interface
 regardless of which backend actually runs.
 
-For the Ultralytics .pt step the loader imports:
-    from ultralytics import RTDETR
-    model = RTDETR("rtdetr-l.pt")
-which is the spec-mandated Phase-1 approach.
+Optimisations enabled:
+  - FP16 inference on CUDA (halves memory bandwidth)
+  - torch.inference_mode (disables autograd bookkeeping)
+  - Pre-allocated GPU input buffers (eliminates per-frame allocation)
+  - Dedicated CUDA stream per engine (enables overlap)
+  - Vectorised post-process (numpy mask instead of Python loop)
+  - Optional torch.compile for kernel fusion
 
 Singleton caching: ``load_detector_engine()`` returns the same engine instance
 for identical config (keyed on weights path) to avoid duplicate loads.
 """
 import time
 import logging
+import contextlib
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -24,6 +28,12 @@ logger = setup_logger("EngineLoader")
 
 # Singleton cache: weights_key → DetectorEngine
 _engine_cache: Dict[str, "DetectorEngine"] = {}
+
+
+@contextlib.contextmanager
+def _nullcontext():
+    """No-op context manager for when CUDA stream is None."""
+    yield
 
 # ---------------------------------------------------------------------------
 # Uniform detection result
@@ -229,7 +239,8 @@ class RTDETRv2NativeEngine(DetectorEngine):
     }
 
     def __init__(self, weights: str, score_threshold: float = 0.15,
-                 device: str = "cpu", hub_variant: str = "rtdetrv2_r101vd"):
+                 device: str = "cpu", hub_variant: str = "rtdetrv2_r101vd",
+                 use_fp16: bool = True, use_compile: bool = False):
         super().__init__(runtime="rtdetrv2_native")
         self.weights = weights
         self.score_threshold = score_threshold
@@ -238,6 +249,12 @@ class RTDETRv2NativeEngine(DetectorEngine):
         self._model = None
         self._torch_device = device
         self._input_size = (640, 640)
+        self._use_fp16 = use_fp16 and device.startswith("cuda")
+        self._use_compile = use_compile
+        # Pre-allocated GPU tensors (set after first frame)
+        self._input_buffer = None
+        self._orig_sizes_buffer = None
+        self._cuda_stream = None
         self._load()
 
     def _load(self):
@@ -246,7 +263,8 @@ class RTDETRv2NativeEngine(DetectorEngine):
             hub_fn = self._HUB_MODELS.get(self._hub_variant, "rtdetrv2_r101vd")
             self._logger.info(
                 f"Loading RTDETRv2 via torch.hub  variant={hub_fn}  "
-                f"weights={self.weights}  device={self.device}"
+                f"weights={self.weights}  device={self.device}  "
+                f"fp16={self._use_fp16}  compile={self._use_compile}"
             )
 
             # Load architecture from official repo (cached after first download)
@@ -268,13 +286,47 @@ class RTDETRv2NativeEngine(DetectorEngine):
             model.load_state_dict(state, strict=False)
 
             model = model.eval().to(self.device)
+
+            # FP16: halve memory bandwidth and compute on tensor cores
+            if self._use_fp16:
+                model = model.half()
+                self._logger.info("RTDETRv2: FP16 enabled")
+
+            # torch.compile (PyTorch 2.x) — optional, reduces kernel launch overhead
+            if self._use_compile:
+                try:
+                    model = torch.compile(model, mode="reduce-overhead")
+                    self._logger.info("RTDETRv2: torch.compile enabled (reduce-overhead)")
+                except Exception as ce:
+                    self._logger.warning(f"torch.compile failed, using eager: {ce}")
+
             self._model = model
+
+            # Create dedicated CUDA stream for overlapped execution
+            if self.device.startswith("cuda"):
+                self._cuda_stream = torch.cuda.Stream(device=self.device)
+
             self._logger.info(
                 f"RTDETRv2 ({hub_fn}) loaded on {self.device}"
             )
+
+            # Warmup pass (compiles kernels, allocates memory)
+            self._warmup()
+
         except Exception as e:
             self._logger.error(f"RTDETRv2 native load failed: {e}")
             raise
+
+    def _warmup(self):
+        """Run 2 dummy inferences to prime CUDA caches."""
+        import torch
+        try:
+            dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+            for _ in range(2):
+                self.infer(dummy)
+            self._logger.info("RTDETRv2 warmup complete")
+        except Exception:
+            pass  # non-fatal
 
     def infer(self, frame_bgr: np.ndarray) -> List[Detection]:
         if self._model is None:
@@ -289,13 +341,36 @@ class RTDETRv2NativeEngine(DetectorEngine):
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img = img.astype(np.float32) / 255.0
             img = img.transpose(2, 0, 1)  # HWC → CHW
-            tensor = torch.from_numpy(img).unsqueeze(0).to(self._torch_device)
 
-            # Some RTDETRv2 hub models expect `orig_target_sizes` for box rescaling
-            orig_sizes = torch.tensor([[h_orig, w_orig]], device=self._torch_device)
+            # Re-use pre-allocated GPU buffer when possible
+            if self._input_buffer is None or self._input_buffer.device.type != self._torch_device.split(':')[0]:
+                dtype = torch.float16 if self._use_fp16 else torch.float32
+                self._input_buffer = torch.empty(
+                    (1, 3, self._input_size[1], self._input_size[0]),
+                    dtype=dtype, device=self._torch_device,
+                )
+                self._orig_sizes_buffer = torch.empty(
+                    (1, 2), dtype=torch.int64, device=self._torch_device,
+                )
 
-            with torch.no_grad():
-                outputs = self._model(tensor, orig_target_sizes=orig_sizes)
+            # Copy into pre-allocated buffer (avoids fresh allocation every frame)
+            tensor = torch.from_numpy(img).unsqueeze(0)
+            if self._use_fp16:
+                tensor = tensor.half()
+            self._input_buffer.copy_(tensor)
+            self._orig_sizes_buffer[0, 0] = h_orig
+            self._orig_sizes_buffer[0, 1] = w_orig
+
+            # Run on dedicated CUDA stream for potential overlap
+            stream_ctx = torch.cuda.stream(self._cuda_stream) if self._cuda_stream else _nullcontext()
+            with stream_ctx:
+                with torch.inference_mode():
+                    outputs = self._model(self._input_buffer,
+                                          orig_target_sizes=self._orig_sizes_buffer)
+
+            # Sync stream before CPU access
+            if self._cuda_stream:
+                self._cuda_stream.synchronize()
 
             detections: List[Detection] = []
 
@@ -323,14 +398,19 @@ class RTDETRv2NativeEngine(DetectorEngine):
             else:
                 return []
 
-            for i in range(len(scores)):
-                s = float(scores[i])
-                if s < self.score_threshold:
-                    continue
-                cls_id = int(labels[i])
+            # Vectorised score filtering (avoids Python-loop overhead)
+            mask = scores >= self.score_threshold
+            if not mask.any():
+                return []
+            filt_scores = scores[mask]
+            filt_labels = labels[mask]
+            filt_boxes = boxes[mask]
+
+            for i in range(len(filt_scores)):
+                cls_id = int(filt_labels[i])
                 label = _COCO_80_NAMES[cls_id] if cls_id < len(_COCO_80_NAMES) else f"class_{cls_id}"
-                box = [float(boxes[i][j]) for j in range(4)]
-                detections.append(Detection(box, s, label))
+                box = filt_boxes[i].tolist()
+                detections.append(Detection(box, float(filt_scores[i]), label))
 
             return detections
         except Exception as e:
@@ -368,8 +448,9 @@ class UltralyticsRTDETREngine(DetectorEngine):
             return []
         try:
             ul_device = 0 if self.device.startswith("cuda") else "cpu"
+            use_half = self.device.startswith("cuda")
             results = self._model(frame_bgr, conf=self.score_threshold,
-                                  device=ul_device, verbose=False)
+                                  device=ul_device, verbose=False, half=use_half)
             detections: List[Detection] = []
             for r in results:
                 boxes = r.boxes
@@ -490,6 +571,8 @@ def load_detector_engine(models_cfg: Dict[str, Any]) -> DetectorEngine:
     # 4. Try RTDETRv2 Native (.pth from official repo) — NEW DEFAULT
     native_weights = rt_detr_cfg.get("native_weights", "")
     hub_variant = rt_detr_cfg.get("hub_variant", "rtdetrv2_r101vd")
+    use_fp16 = rt_detr_cfg.get("use_fp16", True)
+    use_compile = rt_detr_cfg.get("use_compile", False)
     if native_weights:
         native_path = native_weights
         if not Path(native_path).is_absolute():
@@ -499,6 +582,8 @@ def load_detector_engine(models_cfg: Dict[str, Any]) -> DetectorEngine:
                 engine = RTDETRv2NativeEngine(
                     native_path, score_threshold, device_str,
                     hub_variant=hub_variant,
+                    use_fp16=use_fp16,
+                    use_compile=use_compile,
                 )
                 logger.info(f"✅ Loaded RTDETRv2 native ({hub_variant}): {native_path}")
                 _engine_cache[cache_key] = engine

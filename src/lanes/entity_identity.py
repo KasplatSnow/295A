@@ -117,8 +117,8 @@ class EntityIdentityLane(BaseLane):
         frame_h, frame_w = frame_bgr.shape[:2]
         frame_area = frame_h * frame_w
 
-        # ── 1. Detect persons + faces on crops first ──────────────────
-        person_boxes = self._detect_persons(frame_bgr)
+        # ── 1. Detect persons + animals in a SINGLE YOLO forward pass ──
+        person_boxes, animal_boxes = self._detect_persons_and_animals(frame_bgr)
 
         # Enforce max_tracks_per_frame limit
         if len(person_boxes) > self._max_tracks_per_frame:
@@ -188,8 +188,7 @@ class EntityIdentityLane(BaseLane):
                 d["locked"] = stab_result.get("locked", False)
             identities.append(d)
 
-        # ── 2. Detect animals ─────────────────────────────────────────
-        animal_boxes = self._detect_animals(frame_bgr)
+        # ── 2. Detect animals (already found in single pass above) ────
         for abox, aconf, alabel in animal_boxes:
             crop = self._safe_crop(frame_bgr, abox)
             if crop is None or crop.size == 0:
@@ -236,37 +235,25 @@ class EntityIdentityLane(BaseLane):
             },
         )
 
-    # ── Person detection (shared YOLO) ────────────────────────────────
-    def _detect_persons(self, frame_bgr: np.ndarray) -> List[tuple]:
-        """Return [(bbox, conf, track_id), ...] for person class."""
-        if self._person_detector is None:
-            return []
-        try:
-            results = self._person_detector(frame_bgr, verbose=False, conf=0.25, classes=[0])
-            dets = []
-            if len(results) > 0 and results[0].boxes is not None:
-                boxes = results[0].boxes
-                for i in range(len(boxes)):
-                    box = boxes.xyxy[i].cpu().numpy().astype(int).tolist()
-                    conf = float(boxes.conf[i])
-                    track_id = int(boxes.id[i]) if boxes.id is not None else i
-                    dets.append((box, conf, track_id))
-            return dets
-        except Exception as e:
-            self.logger.error(f"Person detect error: {e}")
-            return []
+    # ── Person + Animal detection (SINGLE YOLO pass) ────────────────
+    def _detect_persons_and_animals(self, frame_bgr: np.ndarray):
+        """
+        Single YOLO forward pass for person (0) + cat (15) + dog (16).
 
-    # ── Animal detection (shared YOLO) ────────────────────────────────
-    def _detect_animals(self, frame_bgr: np.ndarray) -> List[tuple]:
-        """Return [(bbox, conf, label), ...] for cat/dog."""
+        Returns:
+            persons: [(bbox, conf, track_id), ...]
+            animals: [(bbox, conf, label), ...]
+        """
+        persons = []
+        animals = []
         if self._person_detector is None:
-            return []
+            return persons, animals
         try:
+            # Combined class list → one forward pass instead of two
             results = self._person_detector(
                 frame_bgr, verbose=False, conf=0.25,
-                classes=[15, 16],  # COCO cat=15, dog=16
+                classes=[0, 15, 16],
             )
-            dets = []
             if len(results) > 0 and results[0].boxes is not None:
                 boxes = results[0].boxes
                 names = results[0].names
@@ -274,12 +261,26 @@ class EntityIdentityLane(BaseLane):
                     box = boxes.xyxy[i].cpu().numpy().astype(int).tolist()
                     conf = float(boxes.conf[i])
                     cls_id = int(boxes.cls[i])
-                    label = names.get(cls_id, f"class_{cls_id}").lower()
-                    dets.append((box, conf, label))
-            return dets
+                    if cls_id == 0:
+                        track_id = int(boxes.id[i]) if boxes.id is not None else i
+                        persons.append((box, conf, track_id))
+                    elif cls_id in _ANIMAL_COCO_IDS:
+                        label = names.get(cls_id, f"class_{cls_id}").lower()
+                        animals.append((box, conf, label))
         except Exception as e:
-            self.logger.error(f"Animal detect error: {e}")
-            return []
+            self.logger.error(f"Person+animal detect error: {e}")
+        return persons, animals
+
+    # Kept for backward compat (external callers)
+    def _detect_persons(self, frame_bgr: np.ndarray) -> List[tuple]:
+        """Return [(bbox, conf, track_id), ...] for person class."""
+        persons, _ = self._detect_persons_and_animals(frame_bgr)
+        return persons
+
+    def _detect_animals(self, frame_bgr: np.ndarray) -> List[tuple]:
+        """Return [(bbox, conf, label), ...] for cat/dog."""
+        _, animals = self._detect_persons_and_animals(frame_bgr)
+        return animals
 
     # ── Cache ─────────────────────────────────────────────────────────
     def _get_cached(self, track_id: int, now: float) -> Optional[IdentityMatch]:

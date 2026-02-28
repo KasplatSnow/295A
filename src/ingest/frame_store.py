@@ -23,9 +23,13 @@ class LatestFrameStore:
         self._frames: Dict[str, Tuple[str, np.ndarray]] = {}
 
     def update(self, camera_id: str, frame_bgr: np.ndarray, ts_utc: str) -> None:
-        """Update the latest frame for a camera (called from processing thread)."""
+        """Update the latest frame for a camera (called from processing thread).
+
+        Stores a *view* of the caller's frame.  The copy is deferred to
+        ``get()`` so the fast path (processing loop) is not penalised.
+        """
         with self._lock:
-            self._frames[camera_id] = (ts_utc, frame_bgr.copy())
+            self._frames[camera_id] = (ts_utc, frame_bgr)
 
     def get(self, camera_id: str) -> Tuple[Optional[np.ndarray], Optional[str]]:
         """Retrieve latest frame for a camera.  Returns (frame_bgr, ts_utc) or (None, None)."""
