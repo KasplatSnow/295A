@@ -302,7 +302,7 @@ function showAlertDetails(index) {
 
     // Evidence media
     let evidenceHtml = "";
-    if (ev.keyframe_path) {
+    if (ev.keyframe_path && ev.keyframe_path !== "(pending)") {
         const fn = ev.keyframe_path.replace(/\\/g, "/").split("/").pop();
         evidenceHtml += `
         <div class="modal-section">
@@ -310,17 +310,25 @@ function showAlertDetails(index) {
             <div class="evidence-media">
                 <img src="/evidence/${alert.camera_id}/${fn}"
                      alt="Keyframe"
-                     onerror="this.alt='Image not available';this.style.opacity=0.3">
+                     onerror="if(!this.dataset.retry){this.dataset.retry='1';setTimeout(()=>this.src=this.src+'?t='+Date.now(),2000)}else{this.alt='Image not available';this.style.opacity=0.3}">
             </div>
         </div>`;
     }
-    if (ev.clip_path) {
+    if (ev.clip_path && ev.clip_path !== "(pending)") {
         const fn = ev.clip_path.replace(/\\/g, "/").split("/").pop();
         evidenceHtml += `
         <div class="modal-section">
             <h3>Video Clip ${ev.partial_clip ? '<span class="partial-badge">PARTIAL</span>' : ""}</h3>
             <div class="evidence-media">
                 <video controls><source src="/evidence/${alert.camera_id}/${fn}" type="video/mp4"></video>
+            </div>
+        </div>`;
+    } else if (ev.clip_path === "(pending)") {
+        evidenceHtml += `
+        <div class="modal-section">
+            <h3>Video Clip <span class="partial-badge">PROCESSING</span></h3>
+            <div class="evidence-media" style="text-align:center;padding:20px;color:#888">
+                Video clip is being generated&hellip; Refresh the alert in a few seconds.
             </div>
         </div>`;
     }

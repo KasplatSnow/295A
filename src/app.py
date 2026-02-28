@@ -501,13 +501,95 @@ class CameraProcessor:
 
     # ------------------------------------------------------------------
     def _request_evidence_async(self, camera_id: str, alert_type: str, ts_utc: str) -> Dict[str, object]:
-        """Non-blocking evidence export — dispatches to thread pool.
+        """Semi-synchronous evidence: keyframe now, clip in background.
 
-        Returns a placeholder immediately so the processing loop is not
-        stalled by video encoding + disk I/O.
+        Writes the keyframe JPEG immediately from the ring buffer so the
+        alert contains a real path.  The video clip is exported in a
+        background thread (needs to wait for post-event frames).
         """
-        self._evidence_pool.submit(self._request_evidence, camera_id, alert_type, ts_utc)
-        return {"keyframe_path": "(pending)", "clip_path": "(pending)", "partial_clip": False}
+        try:
+            ev_cfg = self.camera_cfg.get("evidence", {})
+            # Build the same file paths the full exporter would use
+            cam_dir = self.evidence_exporter.evidence_dir / camera_id
+            cam_dir.mkdir(parents=True, exist_ok=True)
+            safe_ts = ts_utc.replace(":", "-").replace(".", "-")
+            keyframe_path = cam_dir / f"{safe_ts}_{alert_type}.jpg"
+            clip_path = cam_dir / f"{safe_ts}_{alert_type}.mp4"
+
+            # Grab the most recent pre-event frame from ring buffer
+            pre_frames = self.ringbuffer.get_frames_before(ts_utc, seconds=2.0)
+            if pre_frames:
+                kf_data = pre_frames[-1][1]  # (ts, jpeg_bytes)
+            else:
+                latest = self.ringbuffer.get_latest_frame()
+                kf_data = latest[1] if latest else None
+
+            # Write keyframe JPEG synchronously (< 5 ms)
+            if kf_data:
+                with open(keyframe_path, "wb") as f:
+                    f.write(kf_data)
+
+            # Dispatch full clip export in background thread
+            self._evidence_pool.submit(
+                self._export_clip_only, camera_id, alert_type, ts_utc,
+                clip_path, ev_cfg,
+            )
+
+            return {
+                "keyframe_path": str(keyframe_path),
+                "clip_path": str(clip_path),
+                "partial_clip": False,
+            }
+        except Exception as e:
+            self.logger.error(f"Evidence keyframe export failed: {e}")
+            return {"keyframe_path": "", "clip_path": "", "partial_clip": True}
+
+    # ------------------------------------------------------------------
+    def _export_clip_only(self, camera_id: str, alert_type: str, ts_utc: str,
+                          clip_path, ev_cfg: dict):
+        """Background clip export — waits for post-event frames then writes MP4."""
+        try:
+            pre_seconds = ev_cfg.get("pre_s", 5.0)
+            post_seconds = ev_cfg.get("post_s", 5.0)
+
+            pre_frames = self.ringbuffer.get_frames_before(ts_utc, seconds=pre_seconds)
+
+            # Wait for post-event frames
+            from src.common.timeutil import timestamp_diff_seconds
+            partial_clip = False
+            post_frames = []
+            waited = 0.0
+            poll = 0.5
+            timeout = self.evidence_exporter.post_wait_timeout
+            while waited < timeout:
+                time.sleep(poll)
+                waited += poll
+                all_frames = self.ringbuffer.get_all_frames()
+                post_frames = [
+                    (t, d) for t, d in all_frames
+                    if timestamp_diff_seconds(ts_utc, t) > 0
+                ]
+                if post_frames:
+                    latest_post = post_frames[-1]
+                    if timestamp_diff_seconds(ts_utc, latest_post[0]) >= post_seconds:
+                        break
+            else:
+                partial_clip = True
+
+            post_frames = [
+                (t, d) for t, d in post_frames
+                if 0 < timestamp_diff_seconds(ts_utc, t) <= post_seconds
+            ]
+
+            frames = pre_frames + post_frames
+            if frames:
+                self.evidence_exporter._export_clip(frames, clip_path)
+                self.logger.info(
+                    f"Clip exported {camera_id}/{alert_type}: "
+                    f"{clip_path.name}, partial={partial_clip}"
+                )
+        except Exception as e:
+            self.logger.error(f"Clip export failed: {e}")
 
     # ------------------------------------------------------------------
     def get_stats(self) -> Dict[str, Any]:

@@ -161,7 +161,8 @@ class AlertServer:
             file_path = self.evidence_dir / camera_id / filename
             if file_path.exists():
                 return FileResponse(file_path)
-            return {"error": "File not found"}
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "File not found"}, status_code=404)
 
         @self.app.get("/health")
         async def health():

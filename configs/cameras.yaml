@@ -33,10 +33,10 @@ cameras:
     camera_index: 0               # 0 = default webcam
     ingest_backend: live_camera
     sample_hz:
-      detector: 2
-      anomaly: 0.5
-      temporal: 0.2
-      identity: 2
+      detector: 5
+      anomaly: 2
+      temporal: 0.5
+      identity: 3
     enabled_lanes:
       - rt_detr
       - yolov8_fallback
@@ -49,8 +49,8 @@ cameras:
       - temporal_verifier
       - person_zone
       - entity_identity
-    k_of_n: [3, 5]
-    cooldown_s: 45
+    k_of_n: [4, 7]
+    cooldown_s: 30
     evidence:
       pre_s: 5
       post_s: 5

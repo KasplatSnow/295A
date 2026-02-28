@@ -17,7 +17,7 @@ models:
     weights: "rtdetr-l.pt"                                              # legacy fallback
     onnx_path: "models/rt_detr.onnx"
     trt_engine_path: "models/rt_detr.engine"
-    score_threshold: 0.35                                               # tighter than 0.25 → fewer FPs
+    score_threshold: 0.40                                               # tighter than 0.25 → fewer FPs
     class_allowlist: ["person", "car", "truck", "bus", "motorcycle", "bicycle"]
     use_fp16: true                                                      # FP16 on CUDA (30-50% speedup)
     use_compile: false                                                  # torch.compile (experimental)
@@ -35,7 +35,7 @@ models:
     weights: "models/fire_yolov8.pt"
     hf_repo_id: "SHOU-ISD/fire-and-smoke"
     hf_filename: "yolov8n.pt"             # downloaded then saved as fire_yolov8.pt
-    conf: 0.30
+    conf: 0.38
     class_names: ["fire", "smoke"]        # configurable — must match model output classes
     # class_ids: [0, 1]                    # alternative: use integer ids directly
     min_area_px: 800
@@ -52,14 +52,14 @@ models:
     weights: "models/weapon_yolov8.pt"
     hf_repo_id: "Shantanukadam/weapon_detection"
     hf_filename: "All_weapon.pt"          # broad weapon coverage
-    conf: 0.35
+    conf: 0.42
     class_names: ["gun", "knife", "weapon"]  # configurable — must match model output classes
     # class_ids: [0, 1, 2]                    # alternative: use integer ids directly
 
   # VIOLENCE CANDIDATE: cheap motion heuristic (spec §3A)
   violence_candidate:
-    motion_threshold: 0.55
-    candidate_hits: 2
+    motion_threshold: 0.62
+    candidate_hits: 3
 
   # ANOMALY DETECTION: AnyAnomaly (subprocess, official repo)
   # The entry_script is REQUIRED — worker will NOT guess.
@@ -94,7 +94,7 @@ models:
   anomaly_stub:
     min_motion_area_ratio: 0.015       # suppress if motion occupies too little of frame
     max_global_change_ratio: 0.70     # suppress if entire frame changes (exposure/auto-gain)
-    min_persistence_hits: 3           # require 3 of last 6 above threshold
+    min_persistence_hits: 4           # require 4 of last 6 above threshold
     window_n: 6                       # persistence ring buffer size
     min_interval_s_between_alerts: 30 # prevent spam even if motion continues
 
@@ -124,17 +124,17 @@ runtime:
     - "./models"
     - "./third_party"
   gpu:
-    max_queue: 64
-    max_inflight: 2          # allow 2 concurrent GPU tasks (overlapping CUDA streams)
+    max_queue: 128
+    max_inflight: 4          # allow 4 concurrent GPU tasks (overlapping CUDA streams)
   budgets:
     rtdetr:
       max_latency_ms: 120
     fire_smoke:
       max_latency_ms: 150
     temporal_verifier:
-      max_runs_per_cam_per_min: 12
+      max_runs_per_cam_per_min: 30
     anyanomaly:
-      max_runs_per_cam_per_min: 12
+      max_runs_per_cam_per_min: 30
       drop_if_busy: true
 
 # ── Identity subsystem ──────────────────────────────────────────────
