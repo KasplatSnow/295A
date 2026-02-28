@@ -1217,6 +1217,8 @@ function renderDiagnostics(data) {
         html += `<div>Device: <strong style="color:#e0e0e0">${tv.device || "N/A"}</strong></div>`;
         html += `<div>Input Shape: <strong style="color:#e0e0e0">${tv.last_input_shape || "N/A"}</strong></div>`;
         html += `<div>Padding Applied: <strong style="color:#e0e0e0">${tv.padding_applied != null ? tv.padding_applied : "N/A"}</strong></div>`;
+        html += `<div>Last Score: <strong style="color:#e0e0e0">${tv.last_score != null ? tv.last_score.toFixed(3) : "N/A"}</strong></div>`;
+        html += `<div>Latency: <strong style="color:#e0e0e0">${tv.last_run_latency_ms != null ? tv.last_run_latency_ms + " ms" : "N/A"}</strong></div>`;
         html += `<div>Last Run: <strong style="color:#e0e0e0">${tv.last_run_ts || "N/A"}</strong></div>`;
     }
     html += '</div>';

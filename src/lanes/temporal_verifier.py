@@ -105,6 +105,26 @@ class TemporalVerifierLane(BaseLane):
         self._initialized = True
         self.logger.info(f"Temporal verifier ready (stub={self._stub})")
 
+        # §C5 warmup: run a synthetic clip through the model so diagnostics
+        # show real values immediately and any kernel/shape errors surface now.
+        self._warmup()
+
+    # ------------------------------------------------------------------
+    def _warmup(self):
+        """Run a synthetic 16-frame clip through the model to validate the
+        forward pass and populate ``_last_run_stats`` for diagnostics."""
+        try:
+            # 16 black 224×224 BGR frames — minimal memory, deterministic
+            dummy_frames = [np.zeros((224, 224, 3), dtype=np.uint8) for _ in range(16)]
+            result = self.verify_clip(dummy_frames, target_label="violence", fps=10.0)
+            self.logger.info(
+                f"Warmup verify_clip OK — confirmed={result['confirmed']}, "
+                f"score={result['score']:.3f}, "
+                f"input_shape={result.get('debug', {}).get('input_shape', '?')}"
+            )
+        except Exception as e:
+            self.logger.warning(f"Warmup verify_clip failed: {e}")
+
     # ------------------------------------------------------------------
     @property
     def available(self) -> bool:
@@ -233,6 +253,8 @@ class TemporalVerifierLane(BaseLane):
             "padding_applied": result.get("debug", {}).get("used_padding", False),
             "device": self._torch_device,
             "last_run_ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "last_run_latency_ms": round(dt * 1000, 1),
+            "last_score": result.get("score", 0.0),
             "stub": self._stub,
         }
 
