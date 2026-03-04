@@ -40,6 +40,7 @@ cameras:
     enabled_lanes:
       - rt_detr
       - yolov8_fallback
+      - yolo_pose
       - fire_smoke_yolo
       - violence_candidate
       - fall_candidate

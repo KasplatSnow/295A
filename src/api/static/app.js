@@ -410,6 +410,23 @@ function showAlertDetails(index) {
             </div>
         </div>`; })()}
         ${idDebugSection}
+        ${(() => {
+            const d = alert.debug || {};
+            if (alert.type !== "FALL" || d.reason_codes == null) return "";
+            return `
+            <div class="modal-section">
+                <h3>Fall Detection Debug</h3>
+                <div class="detail-grid">
+                    <div><strong>Reason Codes:</strong> ${(d.reason_codes || []).join(", ") || "none"}</div>
+                    <div><strong>Pose Conf:</strong> ${d.pose_conf != null ? (d.pose_conf * 100).toFixed(1) + "%" : "N/A"}</div>
+                    <div><strong>Torso Angle:</strong> ${d.torso_angle != null ? d.torso_angle + "°" : "N/A"}</div>
+                    <div><strong>Hip Drop:</strong> ${d.hip_drop != null ? d.hip_drop.toFixed(3) : "N/A"}</div>
+                    <div><strong>Velocity:</strong> ${d.velocity != null ? d.velocity.toFixed(1) + " px/s" : "N/A"}</div>
+                    <div><strong>Lying Persist:</strong> <span style="color:${d.lying_persist ? '#4CAF50' : '#F44336'}">${d.lying_persist ? "Yes (" + (d.lying_duration_s || 0).toFixed(1) + "s)" : "No"}</span></div>
+                    <div><strong>Post-Fall Still:</strong> <span style="color:${d.post_fall_still ? '#4CAF50' : '#F44336'}">${d.post_fall_still ? "Yes (" + (d.still_duration_s || 0).toFixed(1) + "s)" : "No"}</span></div>
+                </div>
+            </div>`;
+        })()}
         ${evidenceHtml}
         ${votesTable}
         ${tvSection}

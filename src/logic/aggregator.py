@@ -100,7 +100,8 @@ class AlertAggregator:
 
     def __init__(self, k: int = 3, n: int = 5, cooldown_s: int = 45,
                  alerts_dir: str = "alerts",
-                 fire_secondary_threshold: float = 0.55):
+                 fire_secondary_threshold: float = 0.55,
+                 per_type_kn: Optional[Dict[str, tuple]] = None):
         self.k = k
         self.n = n
         self.cooldown_s = cooldown_s
@@ -109,6 +110,10 @@ class AlertAggregator:
 
         # Fire two-stage threshold
         self.fire_secondary_threshold = fire_secondary_threshold
+
+        # Per-alert-type K/N overrides (e.g. {"FALL": (4, 8)})
+        self._per_type_kn: Dict[str, tuple] = per_type_kn or {}
+        self._per_type_voter_set: set = set()  # tracks which keys already have override
 
         # Per camera, per lane voters
         self.voters: Dict[tuple, KofNVoter] = defaultdict(
@@ -298,12 +303,24 @@ class AlertAggregator:
             self._cache_identity_observation(obs)
             return None
 
+        # ── Pose lane: data-only, never produces alerts ───────────────
+        if obs.lane == "yolo_pose":
+            return None
+
         key = (obs.camera_id, obs.lane)
+
+        # Use per-alert-type K/N override if configured (e.g. FALL → 4/8)
+        alert_type = self._resolve_alert_type(obs)
+        type_kn = self._per_type_kn.get(alert_type)
+        if type_kn and key not in self._per_type_voter_set:
+            k_override, n_override = type_kn
+            self.voters[key] = KofNVoter(k=k_override, n=n_override)
+            self._per_type_voter_set.add(key)
+
         voter = self.voters[key]
         confirmed, hits = voter.vote(obs.trigger)
 
         # Accumulate lane votes for payload
-        alert_type = self._resolve_alert_type(obs)
         vote_key = (obs.camera_id, alert_type)
         self._lane_votes[vote_key].append({
             "lane": obs.lane,
@@ -357,21 +374,53 @@ class AlertAggregator:
 
         # ── Temporal verification for VIOLENCE / FALL (required for SEVERE) ──
         temporal_result = {"confirmed": None, "score": None}
+        verifier_available = (
+            self.temporal_verifier is not None
+            and getattr(self.temporal_verifier, 'available', True)
+            and ringbuffer is not None
+        )
+
         if alert_type in ("VIOLENCE_FIGHT", "FALL"):
-            if (
-                self.temporal_verifier is not None
-                and getattr(self.temporal_verifier, 'available', True)
-                and ringbuffer is not None
-            ):
+            if verifier_available:
                 try:
                     raw_frames = ringbuffer.get_raw_frames_before(obs.ts_utc, seconds=5.0, max_frames=16)
                     target = "fall" if alert_type == "FALL" else "violence"
                     temporal_result = self.temporal_verifier.verify_clip(raw_frames, target_label=target)
                 except Exception as e:
                     self.logger.error(f"Temporal verify error: {e}")
-            else:
+
+            # ── FALL hard gate when temporal verifier unavailable ──────
+            if alert_type == "FALL" and not verifier_available:
+                obs_debug = obs.debug or {}
+                lying_persist = obs_debug.get("lying_persist", False)
+                post_fall_still = obs_debug.get("post_fall_still", False)
+                pose_conf = obs_debug.get("pose_conf", 0.0)
+
+                if pose_conf < 0.35:
+                    self._suppression_counters["fall_suppressed:low_pose_conf"] += 1
+                    self.logger.debug(
+                        f"FALL suppressed: low_pose_conf={pose_conf:.2f}"
+                    )
+                    return None
+
+                if not (lying_persist and post_fall_still):
+                    self._suppression_counters["fall_suppressed:no_verifier_and_not_strong"] += 1
+                    self.logger.debug(
+                        "FALL suppressed: temporal verifier unavailable and "
+                        f"not strong (lying_persist={lying_persist}, post_fall_still={post_fall_still})"
+                    )
+                    return None
+
+                self.logger.info(
+                    "FALL proceeding without temporal verifier (lying_persist + post_fall_still confirmed)"
+                )
+
+            elif alert_type == "FALL" and verifier_available:
+                # Temporal verifier available — require confirmation for HIGH/SEVERE
+                # (severity assignment happens later, but log the result)
                 self.logger.debug(
-                    f"{alert_type} candidate — temporal verifier unavailable, staying MED"
+                    f"FALL temporal result: confirmed={temporal_result.get('confirmed')}, "
+                    f"score={temporal_result.get('score')}"
                 )
 
         # Evidence export

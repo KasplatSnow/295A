@@ -872,6 +872,20 @@ class AlertServer:
 
             return result
 
+        @self.app.get("/debug/fall_state")
+        async def debug_fall_state(camera_id: str = Query(...)):
+            """Return last per-track fall features (angle, hip_drop, stillness, pose_conf)."""
+            for proc in self._camera_processors:
+                if proc.camera_id == camera_id:
+                    fall_lane = proc.lanes.get("fall_candidate")
+                    if fall_lane and hasattr(fall_lane, "last_fall_state"):
+                        return {
+                            "camera_id": camera_id,
+                            "tracks": fall_lane.last_fall_state,
+                        }
+                    return {"camera_id": camera_id, "tracks": {}, "error": "fall_candidate lane not active"}
+            return {"error": f"Camera {camera_id} not found"}
+
         # ==============================================================
         # SYSTEM DIAGNOSTICS (spec §6.3)
         # ==============================================================

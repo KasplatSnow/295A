@@ -48,6 +48,7 @@ from src.lanes.yolov8_fallback import YOLOv8FallbackLane
 from src.lanes.fire_smoke_yolo import FireSmokeYOLOLane
 from src.lanes.violence_candidate import ViolenceCandidateLane
 from src.lanes.fall_candidate import FallCandidateLane
+from src.lanes.yolov8_pose import YOLOv8PoseLane, PoseCache
 from src.lanes.weapon_yolo import WeaponYOLOLane
 from src.lanes.anyanomaly import AnyAnomalyLane
 from src.lanes.anomalyclip import AnomalyCLIPLane
@@ -94,6 +95,7 @@ LANE_REGISTRY = {
     "fire_smoke_yolo": FireSmokeYOLOLane,
     "violence_candidate": ViolenceCandidateLane,
     "fall_candidate": FallCandidateLane,
+    "yolo_pose": YOLOv8PoseLane,
     "weapon_yolo": WeaponYOLOLane,
     "anyanomaly": AnyAnomalyLane,
     "anomalyclip": AnomalyCLIPLane,
@@ -119,6 +121,7 @@ _LANE_HZ_CATEGORY = {
     "violence": "detector",
     "violence_candidate": "anomaly",
     "fall_candidate": "anomaly",
+    "yolo_pose": "detector",
     "weapon_yolo": "detector",
     "anyanomaly": "anomaly",
     "anomalyclip": "anomaly",
@@ -189,6 +192,10 @@ class CameraProcessor:
         # Shared detection cache (avoids duplicate YOLO person forward passes)
         self._det_cache = FrameDetectionCache()
         self._wire_detection_cache()
+
+        # Shared pose cache (yolov8_pose → fall_candidate)
+        self._pose_cache = PoseCache()
+        self._wire_pose_cache()
 
         # yolov8_fallback conditional mode — skip when RT-DETR found detections
         self._fallback_conditional = True
@@ -310,6 +317,14 @@ class CameraProcessor:
                 self.logger.debug(f"Wired detection cache → {lane_name}")
 
     # ------------------------------------------------------------------
+    def _wire_pose_cache(self):
+        """Inject shared pose cache into pose producer + fall consumer."""
+        for lane_name, lane in self.lanes.items():
+            if hasattr(lane, "set_pose_cache"):
+                lane.set_pose_cache(self._pose_cache)
+                self.logger.debug(f"Wired pose cache → {lane_name}")
+
+    # ------------------------------------------------------------------
     def start(self):
         if self._running:
             return
@@ -345,6 +360,7 @@ class CameraProcessor:
         _GPU_LANES = frozenset({
             "rt_detr", "yolov8_fallback", "fire_smoke_yolo",
             "fire_smoke", "weapon_yolo", "entity_identity",
+            "yolo_pose",
         })
 
         while self._running:
@@ -637,9 +653,14 @@ class CCTVAIModule:
         fire_sec = self.models_cfg.get("models", {}).get("fire_smoke", {}).get(
             "fire_secondary_threshold", 0.55
         )
+
+        # Per-alert-type K/N overrides (FALL uses stricter 4/8)
+        per_type_kn = {"FALL": (4, 8)}
+
         self.aggregator = AlertAggregator(
             k=k, n=n, cooldown_s=cooldown_s,
             fire_secondary_threshold=fire_sec,
+            per_type_kn=per_type_kn,
         )
         self.evidence_exporter = EvidenceExporter(evidence_dir="evidence")
 
