@@ -1,260 +1,140 @@
-Role
+You are the architect + senior computer vision engineer. Improve the AI module’s incident detection quality across ALL incident classes: intrusion, loitering, fall, violence, fire/smoke, weapon, optional accident, and unknown anomaly. Keep identity subsystem as-is (already working). No training.
 
-You are the system architect + senior computer vision engineer. You will modify the existing codebase (see attached zip) to fix:
+1) Introduce a unified Incident Framework (mandatory)
 
-Entity enrollment via file upload is unreliable (live capture works).
+Create src/incidents/ with:
 
-Temporal verifier X3D-S fails with kernel-size error: T=5 H=W=7.
+base.py: IncidentDefinition (candidate sources, confirm policy, severity policy, suppression policy)
 
-Too many false positives in unknown anomaly + candidate lanes.
+state.py: per-camera/per-track state machines with persistence counters
 
-Do this with minimal disruption: preserve existing APIs when possible, but you may add new ones if the new workflow is more robust.
+registry.py: registers incidents and their rules
 
-A) Entity upload enrollment — replace with robust staging workflow (and keep legacy)
-A1) Implement “staging upload → enroll by reference” (mandatory)
+All incidents must go through:
+candidate → persistence → confirm (optional) → emit → cooldown
 
-The core fix is: never compute embeddings directly from UploadFile streams. Always persist first, then process from disk.
+Add “reason codes” to every alert:
 
-New endpoints (required)
+why fired
 
-POST /uploads/enroll_images
+why suppressed
 
-multipart files[]
+what confirmed it
 
-Create upload_id = upl_<uuid>
+2) Intrusion + Loitering
 
-Save to: data/staging_uploads/<upload_id>/<idx>_<safe_name>.jpg
+Intrusion = person enters restricted zone (boundary crossing).
 
-Return:
+Loitering = dwell time > threshold using track_id presence.(might "https://www.mdpi.com/2224-2708/12/1/9?utm_source=chatgpt.com" help)
+Add config:
 
-{"upload_id":"upl_...","stored":[{"filename":"0_x.jpg","url":"/staging/upl_.../0_x.jpg"}]}
+intrusion.enter_grace_s
 
-POST /entities/enroll_person_from_upload
+loitering.threshold_s
 
-JSON body: {upload_id, name, role, metadata_json?}
+loitering.escalate_unknown_only
 
-Load all images from disk
+Identity policy must adjust severity.
 
-Extract face embeddings
+3) Fall: replace bbox heuristic with Pose-based fall candidate
 
-Save same images into: data/enroll_images/<entity_id>/...
+Add YOLOv8 Pose lane (use Ultralytics pose weights).
 
-Store embeddings and metadata
+Candidate logic:
 
-POST /identity/reload (or call internal reload)
+torso angle + hip drop + lying persistence + post-fall stillness. ("https://github.com/haashi-r/Real-Time-Fall-Detection?utm_source=chatgpt.com" might help)
 
-Delete staging folder on success (configurable)
+Verifier (X3D/VideoSwin) is confirmation only.
 
-POST /entities/enroll_pet_from_upload
+If verifier unavailable: require strong stillness+lying persistence to emit; else suppress.
 
-Same as person but pet embedder
+4) Violence: person-centric candidate + 3D verifier
 
-Static file serving (required)
+Candidate should require:
 
-GET /staging/{upload_id}/{filename} to serve staging thumbnails for UI preview
+≥2 persons in proximity + high local motion around those bboxes
 
-GET /enroll_images/{entity_id}/{filename} to serve enrolled images
+Extract person-centric clip around the interacting tracks.
 
-Validation rules (required)
+Use X3D/SlowFast style 16-frame classifier as verifier pattern. (might "https://github.com/ShwetaNagapure/RWF-2000-X3D-Violence-Detection?utm_source=chatgpt.com" help)
 
-If 0 valid faces found across all images → reject enrollment with reason + list of images that failed.
+If verifier unavailable: do NOT emit SEVERE; emit MED only if persistence is very strong.
 
-Require min_images good embeddings (config default 3).
+5) Fire/Smoke: dedicated YOLO + quality gates + deterministic weights
 
-Return saved_images_count and saved_filenames in response.
+Implement deterministic weights support:
 
-A2) Hardening the existing legacy endpoints (optional but recommended)
+Option A: git-clone luminous0219 repo and use weights/best.pt (fire/smoke). (might "https://github.com/luminous0219/fire-and-smoke-detection-yolov8/tree/main/weights" help)
 
-For /entities/enroll_person and /entities/enroll_pet:
+Keep class-name mapping mandatory; expose model.names in diagnostics.
 
-Internally route through staging:
+Gates:
 
-save files → call the same enroll-from-upload logic
-This preserves backwards compatibility and fixes the bug.
+bbox area/ratio
 
-A3) UI changes (required)
+persistence (4/8)
 
-Entities tab must use the new workflow:
+optional flicker/texture confirm before SEVERE
 
-Step 1: upload images → show preview thumbnails from /staging/...
+6) Weapon: dedicated YOLO + proximity gating + deterministic weights
 
-Step 2: click “Enroll Person/Pet” → calls /entities/*_from_upload
+Default weights source: HF weapon repo with All_weapon.pt. ("https://huggingface.co/Shantanukadam/weapon_detection" might help)
 
-Show server response including entity_id and links to enrolled images.
+Require weapon bbox to be near a person bbox (or near hands if pose is on).
 
-B) Temporal verifier X3D-S error — fix clip construction + preprocessing (mandatory)
+Require persistence 3/5.
 
-Your error:
-input image (T: 5 H: 7 W: 7) smaller than kernel size (kT: 13 kH: 5 kW: 5)
-This means you are feeding a too-short clip and likely feeding features or downsampled tensors (7x7 spatial) rather than raw frames.
+Severity HIGH/SEVERE only if unknown person or restricted zone.
 
-B1) Temporal verifier must accept RAW FRAMES ONLY (required)
+7) Accident (optional)
 
-Refactor TemporalVerifier interface to accept:
+Only enable “accident/crash” lane if camera is flagged as “traffic”.
 
-frames_bgr: List[np.ndarray] (raw images)
+For traffic mode:
 
-fps: float
-Return:
+allow YOLO crash models / traffic anomaly datasets (DoTA, TU-DAT) as future integration. (some helpful resource would be "https://github.com/MoonBlvd/Detection-of-Traffic-Anomaly?utm_source=chatgpt.com")
 
-confirmed: bool, score: float, debug: {input_shape, clip_len, used_padding}
+Otherwise keep accident off and rely on fall + unknown anomaly.
 
-Do not pass feature maps to X3D. Pass frames.
+8) Unknown anomaly: replace motion-only spam with suppression + persistence
 
-B2) Enforce minimum clip length and size (required)
+Unknown anomaly must be MED by default.
 
-Set these defaults:
+Suppress if explained by:
 
-clip_len = 16
+known person/pet presence
 
-output frame size for model: 224x224
+periodic motion
 
-If ring buffer returns fewer than 16 frames: pad by repeating last frame until 16.
+global illumination change
 
-If frames are too small: resize to 224x224.
+outside sensitive zones
 
-B3) Correct tensor format for X3D (required)
+Persistence: 4/8 + minimum interval between alerts.
 
-Convert frames to tensor:
+9) Diagnostics + UI (mandatory)
 
-BGR → RGB
+Add /system/diagnostics to show:
 
-float32 in [0,1]
+which incidents are enabled
 
-normalize (mean/std; can be standard Kinetics values or a simple ImageNet normalization)
+whether verifiers are available
 
-tensor shape must be: (1, 3, T, 224, 224) where T=16
+per-incident suppression counters
+UI must show:
 
-Log one line per run:
-TemporalVerifier input tensor: (1,3,16,224,224) device=cuda:0
+incident type
 
-B4) Ring buffer extraction must support 16 frames (required)
+severity
 
-Even if temporal verifier runs at low cadence, the ring buffer must store enough frames:
+entity (already)
 
-Ensure ring buffer capture rate is >= 10 fps (already present).
+reason codes (why fired / why suppressed)
 
-Clip extraction: take last 16 frames spaced by sample_rate (default 1).
+Deliverables:
 
-Provide sample_rate in config, but keep default simple.
+Root-cause notes for current FP patterns.
 
-B5) Fallback logic change (required)
+Patch plan (file-by-file).
 
-Only fall back to stub if:
-
-model load fails, OR
-
-preprocessing fails unexpectedly
-Not because clip is too small (you must pad/resize).
-
-Acceptance:
-
-That kernel-size error must never occur again.
-
-C) Reduce false positives (system-wide) — implement “context-aware suppression” + better gating
-
-Your current system over-alerts because:
-
-anomaly stub relies on motion energy
-
-candidate lanes are permissive
-
-there’s not enough “explainable suppression” using identity + zones + time
-
-C1) Add a suppression layer BEFORE emitting any severe alert (required)
-
-Implement policy.suppress(alert_type, context) -> bool with rules:
-
-Unknown anomaly suppression (must)
-
-Suppress UNKNOWN_SEVERE_ANOMALY if:
-
-Motion is explained by:
-
-KNOWN_PERSON with allowed role in allowed zone/time
-
-PET (known pet)
-
-Global exposure change:
-
-too much of the frame changes at once (auto-exposure)
-
-Periodic motion:
-
-fan/trees-like repeating pattern
-
-C2) Improve motion stub gating (required)
-
-In the motion-energy anomaly stub (and any candidate lanes that use motion):
-Add:
-
-min_motion_area_ratio (ignore tiny motion)
-
-max_global_change_ratio (ignore exposure change)
-
-persistence: require sustained hits (e.g. 4/8) instead of 3/5 for unknown anomaly
-
-min_interval_s_between_unknown_alerts (spam control)
-
-C3) Zone-aware anomaly (required)
-
-If zones exist:
-
-compute anomaly only inside “sensitive” zones (restricted/yard)
-
-ignore outside to cut FPs drastically
-
-C4) Identity-driven severity applied consistently (required)
-
-For intrusion:
-
-UNKNOWN_PERSON in restricted zone → HIGH
-
-KNOWN_OWNER/FAMILY in restricted → LOW or suppress (config-driven)
-This reduces “false positives” that are actually correct detections but not actionable.
-
-C5) Add “debug counters” for tuning (required)
-
-Expose via /system/diagnostics:
-
-counts of suppressed alerts by reason
-
-last motion stats (area ratio, global change ratio, periodicity score)
-
-last temporal verifier input shape and whether padding was applied
-
-Update UI Debug tab to display these.
-
-D) Deliverables / acceptance criteria (must all pass)
-
-Entity upload works reliably:
-
-/uploads/enroll_images saves files
-
-UI previews staging images
-
-/entities/enroll_person_from_upload enrolls and persists images and embeddings
-
-/entities/{id}/images shows saved images
-
-Temporal verifier works:
-
-X3D-S never errors with kernel size
-
-Logs show tensor (1,3,16,224,224) and device cuda:0 when GPU enabled
-
-False positives reduced:
-
-Unknown anomaly no longer triggers constantly for benign motion in normal scenes
-
-Suppression reasons are visible in diagnostics/UI
-
-Implementation constraints
-
-Do not break existing realtime pipeline.
-
-Do not add training.
-
-Keep components optional/pluggable.
-
-No hallucinated model files. If a model weight is missing and no deterministic source is configured, keep lane stub/disabled with clear message.
+Implementation.

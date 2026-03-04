@@ -28,13 +28,20 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Callable, Any
-from collections import defaultdict
+from collections import defaultdict, deque
 from ..common.types import Observation, Alert
 from ..common.timeutil import now_iso_utc
 from ..common.log import setup_logger
 from .voting import KofNVoter
 from .cooldown import CooldownManager
 from .deduper import Deduper
+
+# Incident framework (optional — graceful if missing)
+try:
+    from ..incidents import IncidentRegistry
+    _INCIDENT_FRAMEWORK_AVAILABLE = True
+except ImportError:
+    _INCIDENT_FRAMEWORK_AVAILABLE = False
 
 # Identity imports (optional — graceful if missing)
 try:
@@ -58,6 +65,7 @@ LANE_TO_ALERT_TYPE = {
     "violence_candidate": "VIOLENCE_FIGHT",
     "fall_candidate": "FALL",
     "weapon_yolo": "WEAPON_DETECTED",
+    "accident": "ACCIDENT",
     "vad_generic": "UNKNOWN_SEVERE_ANOMALY",
     "anyanomaly": "UNKNOWN_SEVERE_ANOMALY",
     "anomalyclip": "UNKNOWN_SEVERE_ANOMALY",
@@ -67,6 +75,7 @@ LANE_TO_ALERT_TYPE = {
 # Label → alert type for dynamic lanes
 LABEL_TO_ALERT_TYPE = {
     "person": "INTRUSION_PERSON_IN_ZONE",
+    "loitering": "LOITERING",
     "fire": "FIRE_SMOKE",
     "smoke": "FIRE_SMOKE",
     "fire_smoke": "FIRE_SMOKE",
@@ -77,6 +86,8 @@ LABEL_TO_ALERT_TYPE = {
     "violence_candidate": "VIOLENCE_FIGHT",
     "fall": "FALL",
     "fall_candidate": "FALL",
+    "accident": "ACCIDENT",
+    "crash": "ACCIDENT",
     "unknown_anomaly": "UNKNOWN_SEVERE_ANOMALY",
     "anomaly": "UNKNOWN_SEVERE_ANOMALY",
 }
@@ -88,6 +99,8 @@ ALERT_SEVERITY = {
     "FALL": "MED",                  # upgraded to SEVERE by temporal verifier
     "WEAPON_DETECTED": "SEVERE",
     "INTRUSION_PERSON_IN_ZONE": "HIGH",
+    "LOITERING": "MED",
+    "ACCIDENT": "SEVERE",
     "UNKNOWN_SEVERE_ANOMALY": "MED",  # was HIGH; tightened to reduce FPs
 }
 
@@ -148,6 +161,37 @@ class AlertAggregator:
         # AnomalyCLIP / AnyAnomaly lane reference for fire two-stage
         self._anomaly_lanes = {"anomalyclip", "anyanomaly"}
 
+        # ── Incident framework registry ───────────────────────────────
+        self._incident_registry = None
+        if _INCIDENT_FRAMEWORK_AVAILABLE:
+            try:
+                self._incident_registry = IncidentRegistry()
+            except Exception:
+                pass
+
+        # ── Unknown anomaly rate limiting ─────────────────────────────
+        # camera_id → deque of emission timestamps
+        self._unknown_anomaly_emit_times: Dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=20)
+        )
+        self._unknown_anomaly_max_per_interval = 2   # max alerts
+        self._unknown_anomaly_interval_s = 60.0       # window
+
+        # ── Periodic motion detector (per camera) ─────────────────────
+        # camera_id → list of recent anomaly scores for periodicity analysis
+        self._anomaly_score_history: Dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=60)
+        )
+
+        # ── Global illumination change detector ───────────────────────
+        # camera_id → recent mean frame brightness values
+        self._brightness_history: Dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=20)
+        )
+
+        # ── Loitering observations from person_zone lane ──────────────
+        self._person_zone_lanes: Dict[str, Any] = {}  # camera_id → PersonZoneLane
+
         # ── Identity subsystem (§8-§9) ────────────────────────────────
         self._identity_enabled = False
         self._identity_policy = None      # IdentityPolicy
@@ -188,6 +232,55 @@ class AlertAggregator:
         for cam_id, zones in zones_cfg.items():
             if zones:
                 self._zone_cameras.add(cam_id)
+
+    def set_person_zone_lane(self, camera_id: str, person_zone_lane):
+        """Wire person_zone lane for loitering observation polling."""
+        self._person_zone_lanes[camera_id] = person_zone_lane
+
+    def get_incident_registry(self):
+        """Return incident registry for diagnostics."""
+        return self._incident_registry
+
+    # ------------------------------------------------------------------
+    def process_loitering(self, camera_id: str, evidence_request_callback=None, ringbuffer=None):
+        """
+        Poll person_zone lane for pending loitering events and emit LOITERING alerts.
+        Called by the camera processor after each processing cycle.
+        """
+        pz_lane = self._person_zone_lanes.get(camera_id)
+        if pz_lane is None or not hasattr(pz_lane, "get_pending_loitering"):
+            return
+
+        pending = pz_lane.get_pending_loitering()
+        for event in pending:
+            # Create a synthetic observation for loitering
+            obs = Observation(
+                ts_utc=event.get("ts_utc", now_iso_utc()),
+                camera_id=camera_id,
+                lane="person_zone",
+                score=min(1.0, event.get("dwell_s", 0) / max(event.get("threshold_s", 30), 1)),
+                trigger=True,
+                label="loitering",
+                track_id=event.get("track_id"),
+                zone_name=event.get("zone_name"),
+                debug={
+                    "reason_codes": [
+                        f"loitering_dwell ({event.get('dwell_s', 0):.0f}s > {event.get('threshold_s', 0):.0f}s)",
+                        f"zone={event.get('zone_name', 'global')}",
+                    ],
+                    "dwell_s": event.get("dwell_s", 0),
+                },
+            )
+            alert = self.process_observation(
+                obs,
+                evidence_request_callback=evidence_request_callback,
+                ringbuffer=ringbuffer,
+            )
+            if alert:
+                self.logger.info(
+                    f"LOITERING alert: cam={camera_id} track={event.get('track_id')} "
+                    f"dwell={event.get('dwell_s', 0):.0f}s zone={event.get('zone_name')}"
+                )
 
     # ------------------------------------------------------------------
     def _resolve_alert_type(self, obs: Observation) -> str:
@@ -364,6 +457,10 @@ class AlertAggregator:
         # Mark cooldown
         self.cooldown_mgr.mark_fired(obs.camera_id, alert_type, obs.ts_utc)
 
+        # §8 — Rate limit tracking for unknown anomaly
+        if alert_type == "UNKNOWN_SEVERE_ANOMALY":
+            self._unknown_anomaly_emit_times[obs.camera_id].append(time.time())
+
         # Session deduplication
         session_id = self.deduper.get_session_id(
             obs.camera_id,
@@ -442,6 +539,10 @@ class AlertAggregator:
         debug_info = dict(obs.debug or {})
         if fire_stage_b:
             debug_info["fire_two_stage"] = fire_stage_b
+
+        # ── Ensure reason_codes from observation are propagated ───────
+        if "reason_codes" not in debug_info:
+            debug_info["reason_codes"] = []
 
         # ── Resolve entity identity for this alert ────────────────────
         entity_dict = {"id": None, "name": None, "category": None, "confidence": 0.0}
@@ -599,7 +700,7 @@ class AlertAggregator:
     # §C5 — Diagnostics data for /system/diagnostics
     # ------------------------------------------------------------------
     def get_diagnostics(self) -> Dict[str, Any]:
-        """Return suppression counters, motion stats, temporal verifier stats."""
+        """Return suppression counters, motion stats, temporal verifier stats, incident registry."""
         tv_stats = {}
         if self.temporal_verifier is not None:
             if hasattr(self.temporal_verifier, "get_last_run_stats"):
@@ -612,10 +713,19 @@ class AlertAggregator:
         else:
             tv_stats = {"available": False, "reason_unavailable": "temporal_verifier not attached"}
 
+        # Incident registry diagnostics
+        incident_info = {}
+        if self._incident_registry:
+            try:
+                incident_info = self._incident_registry.get_diagnostics()
+            except Exception:
+                pass
+
         return {
             "suppression_counters": dict(self._suppression_counters),
             "motion_stats": dict(self._last_motion_stats),
             "temporal_verifier_stats": tv_stats,
+            "incident_registry": incident_info,
         }
 
     # ------------------------------------------------------------------
@@ -650,8 +760,14 @@ class AlertAggregator:
 
     def _should_suppress_unknown_anomaly(self, obs: Observation) -> Optional[str]:
         """
-        §4.1 + §4.3 — Check if motion is explained by benign detections
-        or if zone-aware filtering should suppress.
+        §4.1 + §4.3 + §8 — Enhanced suppression for UNKNOWN_SEVERE_ANOMALY.
+        Checks:
+          1. Zone-aware filtering (anomaly outside monitored zones)
+          2. Low-confidence filter
+          3. Motion explained by benign detections (known person/pet)
+          4. Rate limiting (max N per interval)
+          5. Periodic motion detection (repeating anomaly pattern)
+          6. Global illumination change detection
         Returns a suppression reason string if should suppress, else None.
         """
         # §4.3 — Zone-aware: if camera has zones but anomaly has no zone_name,
@@ -671,6 +787,47 @@ class AlertAggregator:
         if obs.score < 0.4:
             return f"low_anomaly_score ({obs.score:.2f}<0.40)"
 
+        # ── Rate limiting: max 2 alerts per 60s ──────────────────────
+        emit_times = self._unknown_anomaly_emit_times[obs.camera_id]
+        now = time.time()
+        # Count recent emissions within window
+        recent_count = sum(
+            1 for t in emit_times
+            if now - t < self._unknown_anomaly_interval_s
+        )
+        if recent_count >= self._unknown_anomaly_max_per_interval:
+            return f"rate_limited ({recent_count}>={self._unknown_anomaly_max_per_interval} in {self._unknown_anomaly_interval_s}s)"
+
+        # ── Periodic motion detection ─────────────────────────────────
+        # Track anomaly scores over time; if they oscillate regularly,
+        # it's likely a recurring/periodic source (e.g. rotating fan, tree)
+        score_hist = self._anomaly_score_history[obs.camera_id]
+        score_hist.append(obs.score)
+        if len(score_hist) >= 12:
+            scores_list = list(score_hist)[-12:]
+            # Detect periodicity: count sign changes in score deltas
+            deltas = [scores_list[i+1] - scores_list[i] for i in range(len(scores_list)-1)]
+            sign_changes = sum(
+                1 for i in range(len(deltas)-1)
+                if (deltas[i] > 0) != (deltas[i+1] > 0)
+            )
+            # High number of sign changes = oscillation = periodic
+            if sign_changes >= 7:  # 7+ reversals in 11 deltas → periodic
+                return f"periodic_motion (sign_changes={sign_changes}/11)"
+
+        # ── Global illumination change ────────────────────────────────
+        brightness = (obs.debug or {}).get("frame_brightness")
+        if brightness is not None:
+            bright_hist = self._brightness_history[obs.camera_id]
+            bright_hist.append(float(brightness))
+            if len(bright_hist) >= 3:
+                recent_vals = list(bright_hist)[-3:]
+                delta = abs(recent_vals[-1] - recent_vals[0])
+                avg = sum(recent_vals) / len(recent_vals)
+                if avg > 0 and delta / avg > 0.25:
+                    return f"global_illumination_change (delta={delta:.1f}, avg={avg:.1f})"
+
+        # ── Benign motion explanation ─────────────────────────────────
         dets = self._recent_detections.get(obs.camera_id, [])
         if not dets:
             return None

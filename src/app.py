@@ -50,6 +50,7 @@ from src.lanes.violence_candidate import ViolenceCandidateLane
 from src.lanes.fall_candidate import FallCandidateLane
 from src.lanes.yolov8_pose import YOLOv8PoseLane, PoseCache
 from src.lanes.weapon_yolo import WeaponYOLOLane
+from src.lanes.accident import AccidentLane
 from src.lanes.anyanomaly import AnyAnomalyLane
 from src.lanes.anomalyclip import AnomalyCLIPLane
 from src.lanes.temporal_verifier import TemporalVerifierLane
@@ -97,6 +98,7 @@ LANE_REGISTRY = {
     "fall_candidate": FallCandidateLane,
     "yolo_pose": YOLOv8PoseLane,
     "weapon_yolo": WeaponYOLOLane,
+    "accident": AccidentLane,
     "anyanomaly": AnyAnomalyLane,
     "anomalyclip": AnomalyCLIPLane,
     "temporal_verifier": TemporalVerifierLane,
@@ -123,6 +125,7 @@ _LANE_HZ_CATEGORY = {
     "fall_candidate": "anomaly",
     "yolo_pose": "detector",
     "weapon_yolo": "detector",
+    "accident": "anomaly",
     "anyanomaly": "anomaly",
     "anomalyclip": "anomaly",
     "vad_generic": "anomaly",
@@ -273,6 +276,10 @@ class CameraProcessor:
 
                 lanes[name] = lane
                 self.logger.info(f"Initialised lane: {name}")
+
+                # Wire person_zone into aggregator for loitering observation polling
+                if name == "person_zone":
+                    self.aggregator.set_person_zone_lane(self.camera_id, lane)
 
             except Exception as e:
                 self.logger.error(f"Lane init failed ({name}): {e}")
@@ -488,6 +495,16 @@ class CameraProcessor:
                     except Exception as e:
                         self.logger.error(f"Lane {lane_name} error: {e}")
 
+                # ── Poll loitering observations from person_zone ──────
+                try:
+                    self.aggregator.process_loitering(
+                        self.camera_id,
+                        evidence_request_callback=self._request_evidence_async,
+                        ringbuffer=self.ringbuffer,
+                    )
+                except Exception as e:
+                    self.logger.error(f"Loitering processing error: {e}")
+
                 frame_count += 1
                 self.stats["frames_processed"] = frame_count
                 self.stats["last_frame_ts"] = ts
@@ -654,8 +671,14 @@ class CCTVAIModule:
             "fire_secondary_threshold", 0.55
         )
 
-        # Per-alert-type K/N overrides (FALL uses stricter 4/8)
-        per_type_kn = {"FALL": (4, 8)}
+        # Per-alert-type K/N overrides from incident framework
+        per_type_kn = {
+            "FALL": (4, 8),
+            "FIRE_SMOKE": (4, 8),
+            "WEAPON_DETECTED": (3, 5),
+            "UNKNOWN_SEVERE_ANOMALY": (4, 8),
+            "LOITERING": (3, 5),
+        }
 
         self.aggregator = AlertAggregator(
             k=k, n=n, cooldown_s=cooldown_s,

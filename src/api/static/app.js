@@ -252,6 +252,12 @@ function renderAlerts() {
                     <span><strong>Conf:</strong> ${(alert.confidence * 100).toFixed(1)}%</span>
                     <span><strong>K:</strong> ${alert.k_of_n.hits}/${alert.k_of_n.n}</span>
                 </div>
+                ${(() => {
+                    const rc = (alert.debug || {}).reason_codes || [];
+                    if (rc.length === 0) return "";
+                    const preview = rc.slice(0, 2).join(", ");
+                    return `<div style="color:#FF9800;font-size:11px;margin-top:2px">${preview}${rc.length > 2 ? " ..." : ""}</div>`;
+                })()}
                 ${entityHtml}
                 ${idDebugHtml}
                 ${sessionHtml}
@@ -412,12 +418,24 @@ function showAlertDetails(index) {
         ${idDebugSection}
         ${(() => {
             const d = alert.debug || {};
-            if (alert.type !== "FALL" || d.reason_codes == null) return "";
+            const rc = d.reason_codes || [];
+            if (rc.length === 0 && !d.reason_fired) return "";
+            return `
+            <div class="modal-section">
+                <h3>Reason Codes</h3>
+                <div class="detail-grid">
+                    ${rc.length > 0 ? `<div><strong>Why Fired:</strong> ${rc.join(", ")}</div>` : ""}
+                    ${d.reason_fired ? `<div><strong>Pipeline:</strong> <span style="color:#FF9800">${d.reason_fired}</span></div>` : ""}
+                </div>
+            </div>`;
+        })()}
+        ${(() => {
+            const d = alert.debug || {};
+            if (alert.type !== "FALL" || d.pose_conf == null) return "";
             return `
             <div class="modal-section">
                 <h3>Fall Detection Debug</h3>
                 <div class="detail-grid">
-                    <div><strong>Reason Codes:</strong> ${(d.reason_codes || []).join(", ") || "none"}</div>
                     <div><strong>Pose Conf:</strong> ${d.pose_conf != null ? (d.pose_conf * 100).toFixed(1) + "%" : "N/A"}</div>
                     <div><strong>Torso Angle:</strong> ${d.torso_angle != null ? d.torso_angle + "°" : "N/A"}</div>
                     <div><strong>Hip Drop:</strong> ${d.hip_drop != null ? d.hip_drop.toFixed(3) : "N/A"}</div>
@@ -1292,6 +1310,34 @@ function renderDiagnostics(data) {
         html += `<div style="margin-bottom:8px"><strong style="color:#64B5F6">${camId}:</strong>
             enabled=[${(info.enabled || []).join(", ")}],
             disabled=[${(info.disabled || []).join(", ")}]</div>`;
+    }
+    html += '</div>';
+
+    // Incident Registry
+    const incidents = data.incident_registry || {};
+    const incidentKeys = Object.keys(incidents);
+    html += `<div style="background:#1a1a3a;border:1px solid #2d2d5e;border-radius:8px;padding:16px;margin-bottom:14px">
+        <h3 style="color:#E91E63;font-size:14px;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">Incident Registry</h3>`;
+    if (incidentKeys.length === 0) {
+        html += '<div style="color:#555">Incident framework not loaded.</div>';
+    } else {
+        html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+        html += '<tr style="color:#64B5F6"><th style="text-align:left;padding:4px 8px">Type</th><th style="text-align:center;padding:4px 8px">Enabled</th><th style="text-align:center;padding:4px 8px">Persistence</th><th style="text-align:center;padding:4px 8px">Severity</th><th style="text-align:center;padding:4px 8px">Verifier</th></tr>';
+        for (const [itype, info] of Object.entries(incidents)) {
+            const enabled = info.enabled !== false;
+            const enabledColor = enabled ? "#4CAF50" : "#F44336";
+            const enabledText = enabled ? "YES" : "NO";
+            const confirm = info.confirm || {};
+            const verifier = confirm.require_temporal_verifier ? "Required" : (confirm.require_secondary_signal ? "Secondary" : "None");
+            html += `<tr>
+                <td style="padding:4px 8px;color:#bbb;border-bottom:1px solid #1a1a2e">${info.display_name || itype}</td>
+                <td style="padding:4px 8px;color:${enabledColor};text-align:center;border-bottom:1px solid #1a1a2e">${enabledText}</td>
+                <td style="padding:4px 8px;color:#e0e0e0;text-align:center;border-bottom:1px solid #1a1a2e">${info.persistence || "N/A"}</td>
+                <td style="padding:4px 8px;color:#FF9800;text-align:center;border-bottom:1px solid #1a1a2e">${info.severity_base || "N/A"}</td>
+                <td style="padding:4px 8px;color:#9C27B0;text-align:center;border-bottom:1px solid #1a1a2e">${verifier}</td>
+            </tr>`;
+        }
+        html += '</table>';
     }
     html += '</div>';
 

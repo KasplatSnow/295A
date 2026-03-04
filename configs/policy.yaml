@@ -11,7 +11,25 @@ policy:
     suppress_known_roles:
       - OWNER
       - FAMILY
+    enter_grace_s: 1.0
+
+  loitering:
+    threshold_s: 30
+    escalate_unknown_only: false
+    severity_unknown: "HIGH"
+    severity_known: "LOW"
+    cooldown_s: 60
+    suppress_known_roles:
+      - OWNER
+      - FAMILY
 
   animals:
     known_pet: "SUPPRESS"
     unknown_animal_night: "MED"
+
+  unknown_anomaly:
+    max_alerts_per_interval: 2
+    interval_s: 60
+    suppress_if_known: true
+    suppress_if_periodic: true
+    suppress_if_illumination: true

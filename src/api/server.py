@@ -891,7 +891,7 @@ class AlertServer:
         # ==============================================================
         @self.app.get("/system/diagnostics")
         async def system_diagnostics():
-            """Return device info, ORT providers, lane status, missing assets, suppression counters, motion stats."""
+            """Return device info, ORT providers, lane status, missing assets, suppression counters, motion stats, incident registry."""
             result: Dict[str, Any] = {
                 "device": {},
                 "lanes": {},
@@ -899,6 +899,7 @@ class AlertServer:
                 "suppression_counters": {},
                 "motion_stats": {},
                 "temporal_verifier_stats": {},
+                "incident_registry": {},
             }
 
             # Device info from doctor report
@@ -926,6 +927,7 @@ class AlertServer:
                 result["suppression_counters"] = diag.get("suppression_counters", {})
                 result["motion_stats"] = diag.get("motion_stats", {})
                 result["temporal_verifier_stats"] = diag.get("temporal_verifier_stats", {})
+                result["incident_registry"] = diag.get("incident_registry", {})
 
             # Lane status from camera processors
             for proc in self._camera_processors:

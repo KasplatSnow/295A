@@ -3,6 +3,7 @@
 import cv2
 import torch
 import numpy as np
+import sys
 from pathlib import Path
 
 # ── COCO-80 class names for annotation ──
@@ -29,10 +30,30 @@ LEGACY_WEIGHTS = "rtdetr-l.pt"
 def load_rtdetrv2_native(device: str):
     """Load RTDETRv2 R101vd via official repo (torch.hub)."""
     print(f"[RTDETRv2] Loading native engine on {device} …")
-    model = torch.hub.load(
-        'lyuwenyu/RT-DETR', 'rtdetrv2_r101vd',
-        pretrained=False, source='github',
-    )
+
+    # Temporarily remove paths that contain a local 'src' package so that
+    # torch.hub can import the RT-DETR repo's own src.core without conflict.
+    script_dir = str(Path(__file__).resolve().parent)
+    workspace_dir = str(Path(__file__).resolve().parent.parent)
+    saved_path = sys.path[:]
+    saved_src = {k: v for k, v in sys.modules.items() if k == "src" or k.startswith("src.")}
+    for k in saved_src:
+        del sys.modules[k]
+    sys.path = [p for p in sys.path if p not in ("", ".", script_dir, workspace_dir)]
+
+    try:
+        model = torch.hub.load(
+            'lyuwenyu/RT-DETR', 'rtdetrv2_r101vd',
+            pretrained=False, source='github',
+        )
+    finally:
+        # Restore original sys.path and clear hub's src modules
+        sys.path = saved_path
+        for k in list(sys.modules):
+            if k == "src" or k.startswith("src."):
+                del sys.modules[k]
+        sys.modules.update(saved_src)
+
     ckpt = torch.load(str(NATIVE_WEIGHTS), map_location='cpu')
     if 'ema' in ckpt and 'module' in ckpt['ema']:
         state = ckpt['ema']['module']
@@ -57,9 +78,17 @@ def infer_native(model, frame_bgr, device, conf_thresh=0.25):
     with torch.no_grad():
         out = model(tensor, orig_target_sizes=orig_sizes)
 
-    labels = out['labels'][0].cpu().numpy()
-    boxes  = out['boxes'][0].cpu().numpy()
-    scores = out['scores'][0].cpu().numpy()
+    # Deploy mode returns a tuple: (labels, boxes, scores) each with batch dim
+    if isinstance(out, (list, tuple)) and not isinstance(out[0], dict):
+        labels = out[0][0].cpu().numpy()
+        boxes  = out[1][0].cpu().numpy()
+        scores = out[2][0].cpu().numpy()
+    else:
+        # Non-deploy mode returns a list of dicts
+        result = out[0] if isinstance(out, list) else out
+        labels = result['labels'].cpu().numpy()
+        boxes  = result['boxes'].cpu().numpy()
+        scores = result['scores'].cpu().numpy()
 
     count = 0
     for i in range(len(scores)):
@@ -77,7 +106,6 @@ def infer_native(model, frame_bgr, device, conf_thresh=0.25):
 
 def main():
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
-
     use_native = NATIVE_WEIGHTS.exists()
 
     if use_native:

@@ -59,9 +59,14 @@ models:
     # class_ids: [0, 1]                    # alternative: use integer ids directly
     min_area_px: 800
     min_area_ratio: 0.001
-    min_persistence_hits: 2
+    min_persistence_hits: 4               # updated: 4/8 persistence
+    persistence_window: 8
     max_boxes_considered: 3
     fire_secondary_threshold: 0.55
+    min_aspect_ratio: 0.125               # reject extreme aspect ratios
+    max_aspect_ratio: 8.0
+    flicker_min_hits: 4                   # spatial persistence across frames
+    weights_source: "hf"                  # "hf" or "luminous0219"
 
   # WEAPON DETECTOR: dedicated model (spec §3C)
   # NO FALLBACK — if weights missing, lane is DISABLED
@@ -74,11 +79,40 @@ models:
     conf: 0.42
     class_names: ["gun", "knife", "weapon"]  # configurable — must match model output classes
     # class_ids: [0, 1, 2]                    # alternative: use integer ids directly
+    proximity_required: true               # weapon must be near a person
+    proximity_thresh_px: 200               # max distance weapon→person bbox
+    hand_proximity_thresh_px: 100          # max distance weapon→hand keypoints
+    persistence_k: 3
+    persistence_n: 5
 
-  # VIOLENCE CANDIDATE: cheap motion heuristic (spec §3A)
+  # VIOLENCE CANDIDATE: person-centric proximity + local motion (spec §4)
   violence_candidate:
-    motion_threshold: 0.62
+    motion_threshold: 0.60
     candidate_hits: 3
+    proximity_thresh_px: 200          # max distance between person bboxes
+    min_persons: 2                     # minimum persons in proximity group
+    local_motion_weight: 0.50
+    global_motion_weight: 0.30
+    proximity_weight: 0.20
+    spike_boost: 0.15
+
+  # INTRUSION: boundary crossing detection (spec §2)
+  intrusion:
+    enter_grace_s: 1.0                # grace period for zone edge transitions
+    min_confidence: 0.40
+
+  # LOITERING: dwell time detection (spec §2)
+  loitering:
+    enabled: true
+    threshold_s: 30.0                  # seconds before loitering alert
+    escalate_unknown_only: false       # only escalate severity for unknown persons
+    cooldown_s: 60                     # per-track loitering cooldown
+
+  # ACCIDENT: traffic crash detection stub (spec §7)
+  accident:
+    enabled: false                     # only enable for traffic cameras
+    sudden_stop_threshold: 0.6
+    weights: ""                        # path to crash model when available
 
   # ANOMALY DETECTION: AnyAnomaly (subprocess, official repo)
   # The entry_script is REQUIRED — worker will NOT guess.
