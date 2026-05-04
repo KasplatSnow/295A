@@ -17,6 +17,11 @@ import dj_database_url
 
 from corsheaders.defaults import default_headers
 from server.redis_runtime import resolve_backend_redis_settings
+from server.runtime_services import (
+    env_flag,
+    get_backend_media_root,
+    host_looks_local,
+)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -210,7 +215,7 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = get_backend_media_root(BASE_DIR)
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -271,18 +276,11 @@ _extra = os.getenv("RELAY_RTSP_ALIASES", "").strip()
 if _extra:
     _relay_aliases.update(a.strip().lower() for a in _extra.split(",") if a.strip())
 RELAY_RTSP_ALIASES: frozenset[str] = frozenset(_relay_aliases)
-
-
-def _host_looks_local(hostname: str) -> bool:
-    host = str(hostname or "").strip().lower()
-    return host in {"127.0.0.1", "localhost", "0.0.0.0", "::1", "[::1]"}
-
-
 def _validate_runtime_service_urls() -> None:
     """Fail fast when production-like deployments still point at localhost."""
-    allow_local = os.getenv("ALLOW_LOCALHOST_SERVICE_URLS", "").strip().lower() in {"1", "true", "yes", "on"}
+    allow_local = env_flag("ALLOW_LOCALHOST_SERVICE_URLS", default=False)
     strict_raw = os.getenv("STRICT_SERVICE_URL_VALIDATION", "").strip().lower()
-    strict_validation = (strict_raw in {"1", "true", "yes", "on"}) or (not DEBUG and strict_raw not in {"0", "false", "no", "off"})
+    strict_validation = env_flag("STRICT_SERVICE_URL_VALIDATION", default=(not DEBUG and strict_raw not in {"0", "false", "no", "off"}))
 
     if not strict_validation or allow_local:
         return
@@ -309,11 +307,26 @@ def _validate_runtime_service_urls() -> None:
             problems.append(f"{env_name} has an invalid URL: {raw_value}")
             continue
 
-        if _host_looks_local(parsed.hostname or ""):
+        if host_looks_local(parsed.hostname or ""):
             problems.append(
                 f"{env_name} points to localhost ({raw_value}). "
                 "Set the real internal service address or ALLOW_LOCALHOST_SERVICE_URLS=1 for single-host deployments."
             )
+
+    if not _redis_settings.configured:
+        problems.append("REDIS_URL or REDIS_HOST is missing")
+    elif _redis_settings.url:
+        parsed = urlparse(_redis_settings.url)
+        if host_looks_local(parsed.hostname or ""):
+            problems.append(
+                f"REDIS_URL points to localhost ({_redis_settings.connection_display}). "
+                "Use the real Redis service address or ALLOW_LOCALHOST_SERVICE_URLS=1 for single-host deployments."
+            )
+    elif host_looks_local(_redis_settings.host):
+        problems.append(
+            f"REDIS_HOST points to localhost ({_redis_settings.connection_display}). "
+            "Use the real Redis service address or ALLOW_LOCALHOST_SERVICE_URLS=1 for single-host deployments."
+        )
 
     if problems:
         raise ImproperlyConfigured("Service URL validation failed: " + " | ".join(problems))

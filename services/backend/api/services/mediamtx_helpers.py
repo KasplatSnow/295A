@@ -8,14 +8,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from urllib.parse import urlparse, urlunparse
 from api.models import Camera
+from server.runtime_services import (
+    get_ai_base_url as resolve_ai_base_url,
+    get_mediamtx_api_base as resolve_mediamtx_api_base,
+    get_mediamtx_internal_rtsp_url,
+    get_mediamtx_rtsp_base as resolve_mediamtx_rtsp_base,
+)
 
 
 # Bump this when the payload renderer changes (e.g. FFmpeg flags)
 # to force a one-time controlled re-apply across all paths.
-MEDIAMTX_PAYLOAD_RENDERER_VERSION = 4
+MEDIAMTX_PAYLOAD_RENDERER_VERSION = 5
 
 
 def sanitize_stream_url(url: str) -> str:
@@ -76,12 +81,12 @@ def get_canonical_camera_id(camera: Camera) -> str:
 
 
 def get_mediamtx_api_base() -> str:
-    return os.getenv("MEDIAMTX_API_URL", "http://127.0.0.1:9997").rstrip("/")
+    return resolve_mediamtx_api_base()
 
 
 def get_ai_base_url() -> str:
     """Return the base URL for the AI module API."""
-    return os.getenv("AI_BASE_INTERNAL", "http://127.0.0.1:8080").rstrip("/")
+    return resolve_ai_base_url()
 
 
 def get_relay_identity() -> tuple[frozenset[str], int]:
@@ -96,7 +101,7 @@ def get_relay_identity() -> tuple[frozenset[str], int]:
         return settings.RELAY_RTSP_ALIASES, settings.RELAY_RTSP_PORT
     except Exception:
         # Fallback for management commands / non-Django contexts
-        internal_rtsp = os.getenv("MEDIAMTX_INTERNAL_RTSP_URL", "rtsp://127.0.0.1:8554")
+        internal_rtsp = get_mediamtx_internal_rtsp_url()
         parsed = urlparse(internal_rtsp)
         host = (parsed.hostname or "127.0.0.1").lower()
         port = parsed.port or 8554
@@ -176,11 +181,7 @@ def is_self_referential(url: str) -> bool:
 
 def get_mediamtx_loopback_url(stream_path: str) -> str:
     """Return the RTSP loopback URL for AI ingestion through MediaMTX."""
-    base = os.getenv("MEDIAMTX_RTSP_BASE", "").strip()
-
-    if not base:
-        base = os.getenv("MEDIAMTX_INTERNAL_RTSP_URL", "rtsp://127.0.0.1:8554").strip()
-
+    base = resolve_mediamtx_rtsp_base()
     return f"{base.rstrip('/')}/{str(stream_path).lstrip('/')}"
 
 
@@ -260,7 +261,7 @@ def build_mediamtx_path_payload(
         if camera.ai_camera_id == "cam_live":
             ai_api_base = get_ai_base_url()
             input_url = f"{ai_api_base}/stream/cam_live"
-            rtsp_target_base = os.getenv("MEDIAMTX_INTERNAL_RTSP_URL", "rtsp://127.0.0.1:8554").rstrip("/")
+            rtsp_target_base = get_mediamtx_internal_rtsp_url().rstrip("/")
             command = (
                 'ffmpeg -nostdin -loglevel error '
                 f'-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '
@@ -312,7 +313,7 @@ def build_mediamtx_path_payload(
         if camera.rtsp_url.lower().startswith("https://"):
             ffmpeg_cmd += '-tls_verify 0 '
 
-        rtsp_target_base = os.getenv("MEDIAMTX_INTERNAL_RTSP_URL", "rtsp://127.0.0.1:8554").rstrip("/")
+        rtsp_target_base = get_mediamtx_internal_rtsp_url().rstrip("/")
         command = (
             ffmpeg_cmd +
             f'-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '

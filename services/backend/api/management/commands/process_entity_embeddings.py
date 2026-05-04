@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from api.management.commands._runtime_waits import wait_for_ai
 from api.services.worker_services import EntityEmbeddingProcessor, BaseWorkerService
 
 
@@ -22,6 +23,8 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         limit = options["limit"]
         poll_interval = options["poll_interval"]
+
+        wait_for_ai(self.stdout, self.style)
 
         # Thin wrapper over SOLID service layer
         processor = EntityEmbeddingProcessor(limit=limit)

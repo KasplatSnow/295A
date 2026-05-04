@@ -47,39 +47,67 @@ class NotificationService:
     @classmethod
     def broadcast_incident(cls, incident: Incident) -> dict:
         """
-        Broadcast an incident to all members of the incident's tenant.
-
-        IMPORTANT: This method is designed to be called from a
-        ``transaction.on_commit()`` callback (see incident_ingest.py).
-        It must NOT register another ``on_commit`` internally, because
-        nested ``on_commit`` calls outside an ``atomic()`` block are
-        unreliable across Django versions and database backends.
-        All channel-layer pushes happen **inline** here.
+        Immediate broadcast of an incident (Real-time WS).
+        Heavy tasks (Email/Push/Batching) should be moved to backfill_incident.
         """
         tenant = incident.tenant
-        results = {
-            "realtime": "pending",
-            "websocket": "pending",
-            "email": None,
-            "push": None,
-            "alerts_created": 0,
-        }
+        
+        # 1. Build notification payload
+        notification = cls._build_incident_notification(incident)
 
-        # 1. Get notification channel settings
+        # 2. Push to channel layer INLINE for immediate feedback
+        ws_result = cls._broadcast_to_channel(
+            tenant_id=tenant.id,
+            notification_type="incident",
+            data={
+                **notification,
+                "type": "NEW_NOTIFICATION_PING", # Fast ping, client can fetch details
+            },
+        )
+        
+        logger.info(
+            "broadcast_incident (ping) incident=%s tenant=%s ws=%s",
+            incident.pk, tenant.id, ws_result,
+        )
+        return {"realtime": ws_result}
+
+    @classmethod
+    def backfill_incident(cls, incident_id: str) -> dict:
+        """
+        Background task to create Alert records and send Email/Push.
+        """
+        try:
+            incident = Incident.objects.select_related("tenant", "camera").get(pk=incident_id)
+        except Incident.DoesNotExist:
+            return {"error": "incident_not_found"}
+
+        tenant = incident.tenant
+        results = {"alerts_created": 0, "email": None, "push": None}
+
+        # 1. Get settings
         try:
             channel_settings = NotificationChannel.objects.get(tenant=tenant)
         except NotificationChannel.DoesNotExist:
             channel_settings = None
 
-        # 2. Build notification payload
+        # 2. Build payload
         notification = cls._build_incident_notification(incident)
 
-        # 3. Create alert records in bulk
+        # 3. Create alert records (Serialized to avoid duplicates)
         count, alert_mapping = cls._create_alerts_for_members(incident, notification)
         results["alerts_created"] = count
 
-        # 4. Push to channel layer INLINE (no on_commit — caller already ensured commit)
-        #    Compute per-user unread counts for the "Thin-but-Accurate" WS message.
+        # 4. Email notification
+        if channel_settings and channel_settings.email_enabled:
+            email_result = cls._send_email_notification(incident, channel_settings)
+            results["email"] = email_result
+
+        # 5. Push notification (FCM)
+        if channel_settings and channel_settings.push_enabled:
+            push_result = cls._send_push_notification(incident, channel_settings)
+            results["push"] = push_result
+
+        # 6. Secondary WS push with full counts
         user_counts = {
             str(u_id): Alert.objects.filter(
                 user_id=u_id,
@@ -89,30 +117,16 @@ class NotificationService:
             for u_id in alert_mapping.keys()
         }
 
-        event_payload = {
-            **notification,
-            "type": "NEW_NOTIFICATION",
-            "alert_ids_by_user": alert_mapping,
-            "unread_counts_by_user": user_counts,
-        }
-
-        ws_result = cls._broadcast_to_channel(
+        cls._broadcast_to_channel(
             tenant_id=tenant.id,
             notification_type="incident",
-            data=event_payload,
+            data={
+                **notification,
+                "type": "NEW_NOTIFICATION_DETAILS",
+                "alert_ids_by_user": alert_mapping,
+                "unread_counts_by_user": user_counts,
+            },
         )
-        results["realtime"] = ws_result
-        results["websocket"] = ws_result
-
-        logger.info(
-            "broadcast_incident incident=%s tenant=%s alerts=%d ws=%s",
-            incident.pk, tenant.id, count, ws_result,
-        )
-
-        # 5. Email notification (if configured)
-        if channel_settings and channel_settings.email_enabled:
-            email_result = cls._send_email_notification(incident, channel_settings)
-            results["email"] = email_result
 
         return results
 

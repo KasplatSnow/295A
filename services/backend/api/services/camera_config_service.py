@@ -70,6 +70,16 @@ class CameraConfigService:
             transcode_required=MediaRelayMode.transcode_required(camera),
         )
         self.outbox_service.emit(
+            aggregate_type="mediamtx_desired_path",
+            aggregate_id=camera.id,
+            event_type="mediamtx.desired_path_changed",
+            payload={
+                "tenant_id": camera.tenant_id,
+                "camera_id": camera.id,
+                "stream_path": camera.stream_path,
+            },
+        )
+        self.outbox_service.emit(
             aggregate_type="camera",
             aggregate_id=camera.id,
             event_type="camera.created",
@@ -110,6 +120,16 @@ class CameraConfigService:
             desired_enabled=camera.status == Camera.Status.ACTIVE,
             relay_mode=MediaRelayMode.from_camera(camera),
             transcode_required=MediaRelayMode.transcode_required(camera),
+        )
+        self.outbox_service.emit(
+            aggregate_type="mediamtx_desired_path",
+            aggregate_id=camera.id,
+            event_type="mediamtx.desired_path_changed",
+            payload={
+                "tenant_id": camera.tenant_id,
+                "camera_id": camera.id,
+                "stream_path": camera.stream_path,
+            },
         )
         self.outbox_service.emit(
             aggregate_type="camera",

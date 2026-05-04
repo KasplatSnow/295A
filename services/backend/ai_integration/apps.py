@@ -3,6 +3,7 @@ import os
 import threading
 
 from django.apps import AppConfig
+from server.runtime_services import get_ai_base_url, get_public_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +15,8 @@ def _auto_register_webhook():
 
     import requests
 
-    ai_base = os.getenv("AI_BASE_INTERNAL", "http://127.0.0.1:8080")
-    public_url = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+    ai_base = get_ai_base_url()
+    public_url = get_public_base_url()
     webhook_secret = os.getenv("AI_WEBHOOK_SECRET", "")
     callback_url = f"{public_url}/api/ai/webhook/receive/"
 

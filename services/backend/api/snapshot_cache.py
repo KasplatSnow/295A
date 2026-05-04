@@ -123,8 +123,10 @@ def _worker():
             time.sleep(INTERVAL)
             continue
 
-        mediamtx_rtsp_base = os.getenv("MEDIAMTX_RTSP_BASE", "rtsp://127.0.0.1:8554")
-        ai_base = os.getenv("AI_BASE_INTERNAL", "http://127.0.0.1:8080")
+        from server.runtime_services import get_ai_base_url, get_mediamtx_rtsp_base
+
+        mediamtx_rtsp_base = get_mediamtx_rtsp_base()
+        ai_base = get_ai_base_url()
         active_ids = _get_ai_active_camera_ids(ai_base)
 
         for pk, rtsp_url, stream_path, ai_camera_id in cameras:

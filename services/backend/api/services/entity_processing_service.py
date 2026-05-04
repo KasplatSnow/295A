@@ -16,6 +16,7 @@ from api.models import (
     KnownEntityProcessingJob,
 )
 from api.services.outbox_service import OutboxService
+from server.runtime_services import get_ai_base_url
 
 
 logger = logging.getLogger(__name__)
@@ -318,8 +319,7 @@ class EntityProcessingService:
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
 
-        # Prefer localhost on Windows for better IPv4/IPv6 resolution fallback
-        ai_base = os.getenv("AI_BASE_INTERNAL", "http://localhost:8080").rstrip("/")
+        ai_base = get_ai_base_url().rstrip("/")
         url = f"{ai_base}/api/v1/embeddings/generate"
         
         timeout = float(os.getenv("ENTITY_EMBED_GENERATE_TIMEOUT_S", "60"))

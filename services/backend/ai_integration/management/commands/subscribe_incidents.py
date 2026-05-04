@@ -21,6 +21,7 @@ import time
 
 from django.core.management.base import BaseCommand
 
+from api.management.commands._runtime_waits import wait_for_redis
 from ai_integration.redis_queue import (
     ack_stream_event,
     build_subscriber_status,
@@ -88,6 +89,7 @@ class Command(BaseCommand):
                 f"consumer={settings.incident_consumer_name} mode={settings.queue_mode}"
             )
         )
+        wait_for_redis(self.stdout, self.style)
 
         # Graceful shutdown
         self._running = True

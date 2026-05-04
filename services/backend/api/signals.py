@@ -60,9 +60,19 @@ def broadcast_incident_notification(sender, instance, created, **kwargs):
 
         def _broadcast():
             from .notification_service import NotificationService
+            from .services.outbox_service import OutboxService
             try:
                 inc = Incident.objects.select_related("tenant", "camera").get(pk=incident_id)
+                # 1. Immediate WS Ping (Non-blocking browser feedback)
                 NotificationService.broadcast_incident(inc)
+                
+                # 2. Enqueue Background Backfill (Email, Alerts, Unread Counts)
+                OutboxService.emit(
+                    aggregate_type="incident",
+                    aggregate_id=str(incident_id),
+                    event_type="incident.created",
+                    payload={"incident_id": str(incident_id)}
+                )
             except Incident.DoesNotExist:
                 import logging
                 logging.getLogger(__name__).warning(

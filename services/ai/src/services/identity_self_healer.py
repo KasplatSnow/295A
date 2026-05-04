@@ -5,6 +5,7 @@ import time
 from typing import Optional
 
 import httpx
+from ..common.runtime import get_backend_config_sync_base
 
 logger = logging.getLogger("IdentitySelfHealer")
 
@@ -23,12 +24,7 @@ class IdentitySelfHealer:
         self._entity_store = entity_store
         self._poll_interval = poll_interval_seconds
         
-        backend_sync_base = os.environ.get("BACKEND_CONFIG_SYNC_BASE", "").strip()
-        if not backend_sync_base:
-            backend_base = os.environ.get("BACKEND_BASE_INTERNAL", "http://127.0.0.1:8000").rstrip("/")
-            backend_sync_base = f"{backend_base}/api/ai/internal"
-
-        self._backend_sync_base = backend_sync_base.rstrip("/")
+        self._backend_sync_base = get_backend_config_sync_base().rstrip("/")
         
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None

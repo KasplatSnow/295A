@@ -5,6 +5,7 @@ import threading
 import time
 from typing import Optional
 
+from ..common.runtime import resolve_ai_redis_settings
 from .redis_publisher import _get_redis, _sanitize_redis_url
 
 logger = logging.getLogger("IdentityStreamSubscriber")
@@ -23,10 +24,12 @@ class IdentityStreamSubscriber:
 
     def __init__(self, entity_store):
         self._entity_store = entity_store
-        
-        self._url = os.getenv("AI_REDIS_URL", os.getenv("REDIS_URL", ""))
-        self._host = os.getenv("AI_REDIS_HOST", os.getenv("REDIS_HOST", "127.0.0.1"))
-        self._port = int(os.getenv("AI_REDIS_PORT", os.getenv("REDIS_PORT", "6379")))
+
+        redis_settings = resolve_ai_redis_settings()
+        self._redis_configured = redis_settings.configured
+        self._url = redis_settings.url
+        self._host = redis_settings.host
+        self._port = redis_settings.port
         
         # Configure best-effort stream listening
         self._stream = os.getenv("AI_EVENT_STREAM", "vigilzone:stream:events")
@@ -45,6 +48,12 @@ class IdentityStreamSubscriber:
         redis_mod = _get_redis()
         if redis_mod is None:
             logger.warning("Redis library missing, IdentityStreamSubscriber cannot start.")
+            return
+        if not self._redis_configured:
+            logger.warning(
+                "IdentityStreamSubscriber cannot start: Redis is not explicitly configured. "
+                "The watermark self-healer remains active."
+            )
             return
 
         self._stop_event.clear()

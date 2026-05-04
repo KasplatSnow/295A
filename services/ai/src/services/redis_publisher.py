@@ -19,6 +19,8 @@ import time
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, urlunparse
 
+from ..common.runtime import resolve_ai_redis_settings
+
 logger = logging.getLogger("RedisPublisher")
 
 # Lazy-loaded redis module (only imported when enabled)
@@ -52,9 +54,11 @@ class IncidentRedisPublisher:
     """Publishes normalized incident events to the Redis incident stream."""
 
     def __init__(self):
-        self._url = os.getenv("AI_REDIS_URL", os.getenv("REDIS_URL", ""))
-        self._host = os.getenv("AI_REDIS_HOST", os.getenv("REDIS_HOST", ""))
-        self._port = int(os.getenv("AI_REDIS_PORT", os.getenv("REDIS_PORT", "0"))) or None
+        redis_settings = resolve_ai_redis_settings()
+        self._redis_configured = redis_settings.configured
+        self._url = redis_settings.url
+        self._host = redis_settings.host if redis_settings.source != "defaults" else ""
+        self._port = redis_settings.port if redis_settings.source != "defaults" else None
         self._channel = os.getenv("AI_INCIDENT_CHANNEL", "vigilzone.ai.incidents")
         self._client: Optional[Any] = None
         self._enabled = str(os.getenv("AI_USE_REDIS_PUBLISH", "0")).strip().lower() in {
@@ -70,6 +74,12 @@ class IncidentRedisPublisher:
         }
 
         if self._enabled:
+            if not self._redis_configured:
+                logger.error(
+                    "Redis incident stream publisher enabled, but Redis is not explicitly configured. "
+                    "Set AI_REDIS_URL/REDIS_URL or AI_REDIS_HOST/REDIS_HOST."
+                )
+                return
             try:
                 redis = _get_redis()
                 if self._url:

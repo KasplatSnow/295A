@@ -17,6 +17,7 @@ from django.db.models import Q, TextField
 from django.db.models.functions import Cast
 from django.conf import settings
 from django.utils import timezone
+from server.runtime_services import get_mediamtx_external_url
 from ai_integration.redis_queue import (
     append_incident_event,
     build_test_incident_event,
@@ -73,43 +74,53 @@ class IsAuthenticatedOrReadOnly(permissions.IsAuthenticatedOrReadOnly):
     pass
 
 def get_active_tenant(request, required=True):
-    tid = (
-        getattr(request, "tenant_id", None)
-        or request.headers.get("X-Tenant-ID")
-        or request.headers.get("x-tenant-id")
-        or request.META.get("HTTP_X_TENANT_ID")
-    )
-    if not tid:
-        # AUTO-DISCOVERY: If no header, check if the authenticated user has exactly one membership.
-        # This simplifies UI/API calls for single-community users.
-        if request.user and request.user.is_authenticated:
-            memberships = Membership.objects.filter(user=request.user)
-            if memberships.count() == 1:
-                return memberships.first().tenant
+    """
+    Optimized resolver that leverages the request-cached tenant object.
+    """
+    tenant = getattr(request, "tenant", None)
+    if tenant:
+        return tenant
+    
+    # Fallback/Auto-discovery for requests where middleware didn't run or header missing
+    if request.user and request.user.is_authenticated:
+        # If no tenant selected, try to find the only one
+        memberships = Membership.objects.filter(user=request.user)
+        if memberships.count() == 1:
+            return memberships.first().tenant
 
-        if required:
-            raise PermissionDenied("Missing X-Tenant-ID header.")
-        return None
-    try:
-        return Tenant.objects.get(pk=tid)
-    except Tenant.DoesNotExist:
-        if required:
-            raise PermissionDenied("Invalid tenant ID.")
-        return None
+    if required:
+        raise PermissionDenied("Active tenant required. Please provide X-Tenant-ID header.")
+    return None
 
 def assert_member(request, tenant):
+    """Checks if the current user is a member of the tenant (uses request cache)."""
     if not request.user or not request.user.is_authenticated:
         raise NotAuthenticated()
+    
+    # Fast path: check request.membership cache
+    membership = getattr(request, "membership", None)
+    if membership and membership.tenant == tenant:
+        return True
+    
+    # Slow path: direct DB check
     return Membership.objects.filter(user=request.user, tenant=tenant).exists()
 
 
 def get_membership(request, tenant):
+    """Retrieves membership for the current user and tenant (uses request cache)."""
     if not request.user or not request.user.is_authenticated:
         raise NotAuthenticated()
+    
+    # Fast path: check request.membership cache
+    membership = getattr(request, "membership", None)
+    if membership and membership.tenant == tenant:
+        return membership
+    
     return Membership.objects.filter(user=request.user, tenant=tenant).first()
 
 
 def assert_non_viewer(request, tenant):
+    """Enforces that the user is not a read-only viewer (uses request cache)."""
     membership = get_membership(request, tenant)
     if not membership:
         raise PermissionDenied("Not a member of this tenant.")
@@ -761,17 +772,42 @@ def dashboard_summary(request):
 
     incidents = Incident.objects.filter(tenant=tenant)
 
-    # Cameras - DECOUPLED FIX: Include stream_path so the UI can construct 
-    # MediaMTX WebRTC URLs without waiting for AI synchronization.
-    cameras_qs = Camera.objects.filter(tenant=tenant).values(
-        "id", "name", "site", "status", "ai_camera_id", "source_type", "stream_path", "rtsp_url"
+    # Cameras - optimized with select_related for AI sync state
+    cameras_qs = Camera.objects.filter(tenant=tenant).select_related("runtime_registration").values(
+        "id", "name", "site", "status", "ai_camera_id", "source_type", "stream_path", "rtsp_url",
+        "runtime_registration__desired_enabled"
     )
-    from api.models import AIRuntimeRegistration
-    ai_sync_state = {
-        row["camera_id"]: bool(row["desired_enabled"])
-        for row in AIRuntimeRegistration.objects.filter(camera__tenant=tenant).values("camera_id", "desired_enabled")
-    }
     
+    cameras = []
+    for cam in cameras_qs:
+        cam["has_stream"] = bool(cam.pop("rtsp_url", None))
+        cam["is_ai_synced"] = bool(cam.pop("runtime_registration__desired_enabled", False))
+        cameras.append(cam)
+
+    # Aggregated counts - combined into fewer queries
+    incidents_aggs = incidents.aggregate(
+        today=Count('id', filter=Q(started_at__gte=today_start)),
+        week=Count('id', filter=Q(started_at__gte=week_start)),
+        month=Count('id', filter=Q(started_at__gte=month_start)),
+        open=Count('id', filter=Q(status=Incident.Status.OPEN)),
+        critical=Count('id', filter=Q(severity__gte=4, started_at__gte=today_start)),
+    )
+    
+    cameras_aggs = Camera.objects.filter(tenant=tenant).aggregate(
+        total=Count('id'),
+        live=Count('id', filter=Q(status=Camera.Status.ACTIVE))
+    )
+
+    stats = {
+        "today": incidents_aggs["today"],
+        "week": incidents_aggs["week"],
+        "month": incidents_aggs["month"],
+        "open": incidents_aggs["open"],
+        "critical": incidents_aggs["critical"],
+        "camera_total": cameras_aggs["total"],
+        "camera_live": cameras_aggs["live"],
+    }
+
     cameras = []
     for cam in cameras_qs:
         # Convert rtsp_url presence to a safe boolean for the UI (hide credentials)
@@ -1702,7 +1738,7 @@ def streams_mjpeg(request, camera_id):
     ).first()
     stream_path = desired_path.stream_path if desired_path else (camera.stream_path or f"cam_{camera.id}")
 
-    mediamtx_url = os.getenv("MEDIAMTX_EXTERNAL_URL", "http://localhost:8888")
+    mediamtx_url = get_mediamtx_external_url()
 
     # Redirect directly to MediaMTX API for the HLS/WebRTC/MJPEG feed
     from django.shortcuts import redirect

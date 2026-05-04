@@ -74,6 +74,17 @@ class ReconcileResult:
             ],
         }
 
+    def merge(self, other: ReconcileResult) -> None:
+        """Merge another result into this one."""
+        self.total += other.total
+        self.applied += other.applied
+        self.removed += other.removed
+        self.verified += other.verified
+        self.converged += other.converged
+        self.skipped += other.skipped
+        self.failed += other.failed
+        self.results.extend(other.results)
+
 
 class RelayReconciler:
     """
@@ -171,6 +182,42 @@ class RelayReconciler:
         if had_mutations:
             time.sleep(self.POST_MUTATION_COOLDOWN)
 
+        return result
+
+    def reconcile_paths(self, stream_paths: list[str]) -> ReconcileResult:
+        """Reconcile a specific set of paths (usually from events).
+        
+        This bypasses the full-sweep lock as it's intended for fast,
+        targeted updates.
+        """
+        result = ReconcileResult()
+        if not stream_paths:
+            return result
+
+        logger.info("Partial sweep: reconciling %d specific paths", len(stream_paths))
+        desired_rows = list(
+            MediaMTXDesiredPath.objects.filter(stream_path__in=stream_paths).select_related("camera")
+        )
+        
+        for desired in desired_rows:
+            result.total += 1
+            one_result = self.reconcile_one(desired)
+            result.results.append(one_result)
+            
+            if one_result.action == "applied":
+                result.applied += 1
+            elif one_result.action == "removed":
+                result.removed += 1
+            elif one_result.action == "verified":
+                result.verified += 1
+            elif one_result.action == "converged":
+                result.converged += 1
+            elif one_result.action == "skipped":
+                result.skipped += 1
+            
+            if one_result.error:
+                result.failed += 1
+        
         return result
 
     def reconcile_one(self, desired: MediaMTXDesiredPath) -> PathResult:
@@ -329,8 +376,8 @@ class RelayReconciler:
         verified_state = self._get_runtime_path(api_base, stream_path)
 
         now = timezone.now()
-        if verified_state is not None:
-            # Stamp convergence fields only if MediaMTX confirms existence
+        if verified_state is not None and not self._detect_drift(verified_state, payload, desired):
+            # Stamp convergence fields only if MediaMTX confirms existence and NO drift
             desired.last_applied_payload_hash = desired_hash
             desired.last_applied_generation = desired.path_generation
             desired.last_verified_at = now
@@ -340,6 +387,8 @@ class RelayReconciler:
                 "last_verified_at",
                 "updated_at",
             ])
+        elif verified_state is not None:
+            logger.warning("Applied path %s but drift still detected. Skipping stamp.", stream_path)
         else:
             logger.warning("Applied path %s but verification returned None. Skipping stamp.", stream_path)
 
@@ -585,6 +634,12 @@ class RelayReconciler:
             "runOnDemand",
             "runOnInitRestart",
             "runOnDemandRestart",
+            "runOnDemandStartTimeout",
+            "runOnDemandCloseAfter",
+            "sourceOnDemandStartTimeout",
+            "sourceOnDemandCloseAfter",
+            "sourceFingerprint",
+            "rtspTransport",
         ]
 
         for field in fields_to_check:

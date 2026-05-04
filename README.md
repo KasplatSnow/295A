@@ -74,10 +74,10 @@ The fastest way to get VigilZone up and running.
 cp .env.example .env
 
 # 2. Fire up the stack
-docker compose up --build
+# backend_migrate runs automatically as a one-shot dependency.
+docker compose up --build -d
 
 # 3. Bootstrap the database
-docker compose exec backend python manage.py migrate
 docker compose exec backend python manage.py bootstrap_postgres_config
 docker compose exec backend python manage.py createsuperuser
 ```
@@ -123,8 +123,8 @@ npm run dev
 
 ## 🤝 Project Structure
 
-*   `services/ai/`: FastAPI worker cluster.
-*   `services/backend/`: Django monolith (Incidents, Auth, Multi-tenancy).
+*   `services/ai/`: FastAPI inference service.
+*   `services/backend/`: Django monolith (Incidents, Auth, Multi-tenancy) plus explicit worker commands.
 *   `web/ui/`: Modern React dashboard.
 *   `deploy/nginx/`: Edge routing and security.
 *   `plan/`: High-level architecture and implementation roadmaps.

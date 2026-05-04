@@ -5,14 +5,13 @@ Forwards requests from Django to the internal AI service at AI_BASE_INTERNAL,
 preserving method, headers, query params, body, and streaming responses.
 """
 import logging
-import os
 
 import requests as http_client
 from django.http import StreamingHttpResponse, JsonResponse, HttpResponse
+from server.runtime_services import get_ai_base_url
 
 logger = logging.getLogger(__name__)
 
-AI_BASE = os.getenv("AI_BASE_INTERNAL", "http://127.0.0.1:8080")
 _CONNECT_TIMEOUT = 5   # fast-fail if AI service is unreachable
 _READ_TIMEOUT = 30     # seconds for non-streaming reads
 _STREAM_TIMEOUT = 120
@@ -28,7 +27,7 @@ _HOP_BY_HOP = frozenset({
 
 def _build_url(path: str) -> str:
     """Join AI_BASE + path, avoiding double slashes."""
-    base = AI_BASE.rstrip("/")
+    base = get_ai_base_url().rstrip("/")
     path = path.lstrip("/")
     return f"{base}/{path}"
 

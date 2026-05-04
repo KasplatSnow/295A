@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from api.management.commands._runtime_waits import wait_for_redis
 from api.services.worker_services import OutboxStreamPublisherProcessor, BaseWorkerService
 
 
@@ -29,6 +30,8 @@ class Command(BaseCommand):
         poll_interval = options["poll_interval"]
         batch_size = options["batch_size"]
         stream_name = options["stream_name"]
+
+        wait_for_redis(self.stdout, self.style)
 
         # Thin wrapper over SOLID service layer
         processor = OutboxStreamPublisherProcessor(batch_size=batch_size, stream_name=stream_name)

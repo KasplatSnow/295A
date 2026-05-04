@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 import httpx
 from ..common.log import setup_logger
+from ..common.runtime import get_ai_staging_dir, get_backend_config_sync_base
 
 
 class AlertServer:
@@ -38,11 +39,18 @@ class AlertServer:
                         "Exposes REST + WebSocket + Webhook endpoints for integration.",
         )
 
-        # CORS — allow the main-drive microservice (and any origin during dev)
+        cors_allowed_origins = [
+            origin.strip()
+            for origin in str(os.getenv("AI_CORS_ALLOWED_ORIGINS", "*") or "*").split(",")
+            if origin.strip()
+        ]
+        allow_all_origins = cors_allowed_origins == ["*"]
+
+        # CORS — open by default for local/dev, configurable for cloud deployments.
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],        # tighten in production
-            allow_credentials=True,
+            allow_origins=cors_allowed_origins,
+            allow_credentials=not allow_all_origins,
             allow_methods=["*"],
             allow_headers=["*"],
         )
@@ -58,7 +66,7 @@ class AlertServer:
         self._aggregator = None  # live aggregator reference
 
         # §A1 — staging uploads directory
-        self._staging_dir = Path("data/staging_uploads")
+        self._staging_dir = get_ai_staging_dir(Path.cwd())
         self._staging_dir.mkdir(parents=True, exist_ok=True)
 
         # §C5 — debug counters for suppression/diagnostics
@@ -90,11 +98,7 @@ class AlertServer:
         # §2.2 — shared frame store for camera capture enrollment
         self._frame_store = None
 
-        backend_sync_base = os.getenv("BACKEND_CONFIG_SYNC_BASE", "").strip()
-        if not backend_sync_base:
-            backend_base = os.getenv("BACKEND_BASE_INTERNAL", "http://127.0.0.1:8000").rstrip("/")
-            backend_sync_base = f"{backend_base}/api/ai/internal"
-        self._backend_sync_base = backend_sync_base.rstrip("/")
+        self._backend_sync_base = get_backend_config_sync_base().rstrip("/")
         self._sync_token = os.getenv("AI_WEBHOOK_TOKEN", "")
         self._sync_secret = os.getenv("AI_WEBHOOK_SECRET", "")
 

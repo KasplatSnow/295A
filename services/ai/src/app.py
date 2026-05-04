@@ -31,6 +31,12 @@ load_dotenv(parent_dir.parent.parent / ".env", override=False)  # monolith root 
 
 from src.common.config import Config
 from src.common.log import setup_logger
+from src.common.runtime import (
+    get_ai_api_port,
+    get_ai_evidence_dir,
+    get_ai_public_base_url,
+    validate_runtime_environment,
+)
 from src.common.timeutil import now_iso_utc
 from src.common.types import Observation, Alert
 
@@ -728,7 +734,9 @@ class CCTVAIModule:
             fire_secondary_threshold=fire_sec,
             per_type_kn=per_type_kn,
         )
-        self.evidence_exporter = EvidenceExporter(evidence_dir="evidence")
+        self.evidence_exporter = EvidenceExporter(
+            evidence_dir=str(get_ai_evidence_dir(parent_dir))
+        )
 
         # Runtime: GPU scheduler
         runtime_cfg = self.models_cfg.get("runtime", {})
@@ -931,14 +939,17 @@ class CCTVAIModule:
 
         self.logger.info("=" * 60)
         self.logger.info("System started successfully")
-        port = int(os.getenv("AI_API_PORT", 8001))
-        self.logger.info(f"Web UI / API: http://127.0.0.1:{port}")
+        self.logger.info(f"Web UI / API: {get_ai_public_base_url()}")
         self.logger.info("=" * 60)
 
     # ------------------------------------------------------------------
     def start_api_server(self):
-        port = int(os.getenv("AI_API_PORT", 8001))
-        self.api_server = AlertServer(host="0.0.0.0", port=port)
+        port = get_ai_api_port()
+        self.api_server = AlertServer(
+            host="0.0.0.0",
+            port=port,
+            evidence_dir=str(self.evidence_exporter.evidence_dir),
+        )
         self.api_server.set_aggregator(self.aggregator)
         self.api_server.set_camera_processors(self.processors)
         self.api_server.set_gpu_scheduler(self.gpu_scheduler)
@@ -1028,6 +1039,7 @@ def main():
                         help="Path to configuration directory")
     args = parser.parse_args()
 
+    validate_runtime_environment()
     app = CCTVAIModule(config_dir=args.config_dir)
     app.run()
 

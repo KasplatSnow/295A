@@ -15,6 +15,7 @@ import time
 
 from django.core.management.base import BaseCommand
 
+from api.management.commands._runtime_waits import wait_for_mediamtx
 from api.services.relay_reconciler import RelayReconciler
 
 logger = logging.getLogger("run_relay_reconciler")
@@ -85,7 +86,7 @@ class Command(BaseCommand):
         signal.signal(signal.SIGTERM, shutdown_handler)
 
         # Wait for MediaMTX to become reachable before starting loop
-        self._wait_for_mediamtx()
+        wait_for_mediamtx(self.stdout, self.style)
 
         while not stop:
             try:
@@ -115,29 +116,6 @@ class Command(BaseCommand):
                 waited += 1.0
 
         self.stdout.write(self.style.SUCCESS("Relay reconciler stopped cleanly."))
-
-    def _wait_for_mediamtx(self):
-        """Block until MediaMTX API is reachable."""
-        import requests as http_client
-        from api.services.mediamtx_helpers import get_mediamtx_api_base
-
-        api_base = get_mediamtx_api_base()
-        self.stdout.write(f"Waiting for MediaMTX at {api_base}...")
-
-        while True:
-            try:
-                resp = http_client.get(
-                    f"{api_base}/v3/config/global/get", timeout=3
-                )
-                if resp.status_code == 200:
-                    self.stdout.write(
-                        self.style.SUCCESS("MediaMTX is reachable. Starting reconciler loop.")
-                    )
-                    return
-            except Exception:
-                pass
-            time.sleep(5)
-
     def _print_result(self, result):
         """Pretty-print a reconcile result."""
         import json

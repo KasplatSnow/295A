@@ -6,16 +6,17 @@ import threading
 import time
 
 from django.core.management.base import BaseCommand
-import requests as http_client
-import redis
 from api.services.worker_services import (
     EntityEmbeddingProcessor,
     OutboxStreamPublisherProcessor,
     RelayReconcilerProcessor,
     BaseWorkerService,
 )
-from api.services.mediamtx_helpers import get_mediamtx_api_base
-from server.redis_runtime import resolve_backend_redis_settings
+from api.management.commands._runtime_waits import (
+    wait_for_ai,
+    wait_for_mediamtx,
+    wait_for_redis,
+)
 
 logger = logging.getLogger("run_worker_node")
 
@@ -45,8 +46,9 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.WARNING("!!! [DEV-ONLY] Starting Unified Worker Node !!!"))
         self.stdout.write("Use only for local development and testing. Deploy separate workers in cloud.")
-        self._wait_for_redis()
-        self._wait_for_mediamtx()
+        wait_for_redis(self.stdout, self.style)
+        wait_for_ai(self.stdout, self.style)
+        wait_for_mediamtx(self.stdout, self.style)
 
         # Instantiate processors
         processors = [
@@ -94,45 +96,3 @@ class Command(BaseCommand):
                 time.sleep(1)
         except KeyboardInterrupt:
             shutdown_handler(None, None)
-
-    def _wait_for_mediamtx(self):
-        api_base = get_mediamtx_api_base()
-        self.stdout.write(f"Waiting for MediaMTX at {api_base} before starting workers...")
-        while True:
-            try:
-                resp = http_client.get(f"{api_base}/v3/config/global/get", timeout=3)
-                if resp.status_code == 200:
-                    self.stdout.write(self.style.SUCCESS("MediaMTX is reachable. Starting worker threads."))
-                    return
-            except Exception:
-                pass
-            time.sleep(5)
-
-    def _wait_for_redis(self):
-        cfg = resolve_backend_redis_settings()
-        display = cfg.connection_display
-        self.stdout.write(f"Waiting for Redis at {display} before starting workers...")
-
-        while True:
-            try:
-                if cfg.url:
-                    client = redis.from_url(cfg.url, decode_responses=True)
-                else:
-                    client = redis.Redis(
-                        host=cfg.host,
-                        port=cfg.port,
-                        db=cfg.db,
-                        password=cfg.password,
-                        decode_responses=True,
-                    )
-
-                client.ping()
-                info = client.info("server")
-                version = str(info.get("redis_version", "unknown"))
-                self.stdout.write(self.style.SUCCESS(f"Redis is reachable (version {version}). Starting worker threads."))
-                return
-            except Exception as exc:
-                self.stdout.write(
-                    self.style.WARNING(f"Redis not ready at {display}: {type(exc).__name__}. Retrying in 5s...")
-                )
-                time.sleep(5)

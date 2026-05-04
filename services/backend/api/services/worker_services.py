@@ -75,21 +75,16 @@ class OutboxStreamPublisherProcessor(WorkerProcessor):
         r = self._get_client()
 
         # Version Check: Redis Streams (XADD) require Redis 5.0+.
-        # This is a live runtime check against the connected Redis server,
-        # not a static assumption about the local environment.
         info = r.info("server")
         ver_str = info.get("redis_version", "0.0.0")
         major_ver = int(ver_str.split(".")[0])
         if major_ver < 5:
             raise RuntimeError(
-                f"Redis version {ver_str} is too old. Redis Streams (XADD) require version 5.0 or higher. "
-                "Please upgrade your Redis server or use the version provided in docker-compose."
+                f"Redis version {ver_str} is too old. Redis Streams (XADD) require version 5.0 or higher."
             )
 
         processed = 0
         with transaction.atomic():
-            # Hardened Claiming: Claim unpublished rows using select_for_update(skip_locked=True)
-            # as per the Repaired Plan to support horizontal scaling safety.
             events = list(
                 OutboxEvent.objects.select_for_update(skip_locked=True)
                 .filter(published_at__isnull=True)
@@ -99,8 +94,6 @@ class OutboxStreamPublisherProcessor(WorkerProcessor):
             processed = 0
             for event in events:
                 try:
-                    # Tier 1: Publish to the Redis event stream (Advisory Backbone)
-                    # We use the stream name from self.stream_name or an env override.
                     actual_stream = os.getenv("AI_EVENT_STREAM", self.stream_name)
                     r.xadd(
                         actual_stream,
@@ -113,13 +106,11 @@ class OutboxStreamPublisherProcessor(WorkerProcessor):
                             "timestamp": str(event.created_at.timestamp()),
                         },
                     )
-                    # Tier 2: Update database as processed (Authoritative)
                     event.published_at = timezone.now()
                     event.save(update_fields=["published_at"])
                     processed += 1
                 except Exception as e:
                     logger.error(f"Failed to publish event {event.id} to Redis: {e}")
-                    # On Redis error, we stop the batch to allow for backoff
                     break
         
         return processed
@@ -129,11 +120,22 @@ class OutboxStreamPublisherProcessor(WorkerProcessor):
 
 
 class RelayReconcilerProcessor(WorkerProcessor):
-    """Reconciles MediaMTX relay paths from Postgres desired state."""
+    """Reconciles MediaMTX relay paths with event-driven wakeups."""
 
-    def __init__(self, shadow_mode: bool = False):
+    def __init__(
+        self,
+        shadow_mode: bool = False,
+        stream_name: str = "vigilzone:stream:events",
+        audit_interval: float = 300.0,
+    ):
         self.shadow_mode = shadow_mode
+        self.stream_name = stream_name
+        self.audit_interval = audit_interval
+        
         self._reconciler = None
+        self._redis_client = None
+        self._last_stream_id = "$"
+        self._last_audit_at = 0.0
 
     def _get_reconciler(self):
         if self._reconciler is None:
@@ -141,17 +143,114 @@ class RelayReconcilerProcessor(WorkerProcessor):
             self._reconciler = RelayReconciler(shadow_mode=self.shadow_mode)
         return self._reconciler
 
+    def _get_redis(self):
+        if self._redis_client is None:
+            cfg = resolve_backend_redis_settings()
+            if cfg.url:
+                self._redis_client = redis.from_url(cfg.url, decode_responses=True)
+            else:
+                self._redis_client = redis.Redis(
+                    host=cfg.host, port=cfg.port, db=cfg.db, password=cfg.password,
+                    decode_responses=True
+                )
+        return self._redis_client
+
     def run_once(self) -> int:
+        r = self._get_redis()
         reconciler = self._get_reconciler()
-        reconciler.reconcile_all()
-        # Always return 0 to force full poll_interval sleep.
-        # The reconciler is infrastructure — it must never trigger
-        # the BaseWorkerService tight-loop (10ms re-run) after mutations.
-        return 0
+        now = time.time()
+        processed = 0
+
+        try:
+            actual_stream = os.getenv("AI_EVENT_STREAM", self.stream_name)
+            streams = r.xread({actual_stream: self._last_stream_id}, count=10, block=100)
+            
+            affected_paths = set()
+            if streams:
+                for _, messages in streams:
+                    for msg_id, data in messages:
+                        self._last_stream_id = msg_id
+                        event_type = data.get("event_type", "")
+                        
+                        if event_type and event_type.startswith("mediamtx."):
+                            try:
+                                payload = json.loads(data.get("payload", "{}"))
+                                path = payload.get("stream_path")
+                                if path:
+                                    affected_paths.add(path)
+                            except Exception:
+                                pass
+
+            if affected_paths:
+                reconciler.reconcile_paths(list(affected_paths))
+                processed = len(affected_paths)
+        except Exception as e:
+            logger.error(f"Error reading relay events from Redis: {e}")
+            time.sleep(1.0)
+
+        if now - self._last_audit_at >= self.audit_interval:
+            logger.info("Performing periodic reconciler audit (full sweep)")
+            reconciler.reconcile_all()
+            self._last_audit_at = now
+            return 0
+        
+        return processed
 
     def get_name(self) -> str:
         mode = "shadow" if self.shadow_mode else "active"
-        return f"RelayReconcilerProcessor({mode})"
+        return f"RelayReconcilerProcessor({mode}, event-driven)"
+
+
+class NotificationBackfillProcessor(WorkerProcessor):
+    """Processes incident.created events for background notification tasks."""
+
+    def __init__(self, stream_name: str = "vigilzone:stream:events"):
+        self.stream_name = stream_name
+        self._redis_client = None
+        self._last_stream_id = "$"
+
+    def _get_redis(self):
+        if self._redis_client is None:
+            cfg = resolve_backend_redis_settings()
+            if cfg.url:
+                self._redis_client = redis.from_url(cfg.url, decode_responses=True)
+            else:
+                self._redis_client = redis.Redis(
+                    host=cfg.host, port=cfg.port, db=cfg.db, password=cfg.password,
+                    decode_responses=True
+                )
+        return self._redis_client
+
+    def run_once(self) -> int:
+        r = self._get_redis()
+        actual_stream = os.getenv("AI_EVENT_STREAM", self.stream_name)
+        
+        try:
+            streams = r.xread({actual_stream: self._last_stream_id}, count=10, block=100)
+            processed = 0
+            
+            if streams:
+                from api.notification_service import NotificationService
+                for _, messages in streams:
+                    for msg_id, data in messages:
+                        self._last_stream_id = msg_id
+                        event_type = data.get("event_type", "")
+                        
+                        if event_type == "incident.created":
+                            payload = json.loads(data.get("payload", "{}"))
+                            incident_id = payload.get("incident_id")
+                            if incident_id:
+                                logger.info(f"Backfilling notifications for incident {incident_id}")
+                                NotificationService.backfill_incident(incident_id)
+                                processed += 1
+            return processed
+        except Exception as e:
+            logger.error(f"Error in NotificationBackfillProcessor: {e}")
+            time.sleep(1.0)
+            return 0
+
+    def get_name(self) -> str:
+        return "NotificationBackfillProcessor"
 
 
 class BaseWorkerService:
@@ -174,15 +273,12 @@ class BaseWorkerService:
                 processed_count = self.processor.run_once()
                 
                 if processed_count == 0:
-                    # Queue is empty, sleep for poll interval
                     time.sleep(self.poll_interval)
                 else:
-                    # Immediate yield but keep draining if busy
                     time.sleep(0.01)
                     
             except Exception as e:
                 logger.error(f"Unexpected error in {name}: {e}", exc_info=True)
-                # Exponential backoff on error
                 time.sleep(5.0)
         
         logger.info(f"{name} loop stopped.")

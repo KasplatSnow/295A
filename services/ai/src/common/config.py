@@ -10,6 +10,8 @@ from typing import Dict, Any, List, Optional
 import httpx
 import yaml
 
+from .runtime import get_backend_config_sync_base
+
 
 class Config:
     """Configuration manager"""
@@ -21,12 +23,7 @@ class Config:
         self._models = None
         self._policy = None
 
-        backend_sync_base = os.getenv("BACKEND_CONFIG_SYNC_BASE", "").strip()
-        if not backend_sync_base:
-            backend_base = os.getenv("BACKEND_BASE_INTERNAL", "http://127.0.0.1:8000").rstrip("/")
-            backend_sync_base = f"{backend_base}/api/ai/internal"
-
-        self._backend_sync_base = backend_sync_base.rstrip("/")
+        self._backend_sync_base = get_backend_config_sync_base().rstrip("/")
         self._sync_token = os.getenv("AI_WEBHOOK_TOKEN", "")
         self._sync_secret = os.getenv("AI_WEBHOOK_SECRET", "")
 

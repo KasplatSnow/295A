@@ -18,6 +18,7 @@ import httpx
 import numpy as np
 
 from ..common.log import setup_logger
+from ..common.runtime import get_ai_enroll_image_dir, get_backend_config_sync_base
 from .schema import EntityRecord
 
 
@@ -27,16 +28,11 @@ class EntityStore:
     def __init__(self, enroll_img_dir: Optional[Path] = None):
         self.logger = setup_logger("EntityStore")
 
-        backend_sync_base = os.environ.get("BACKEND_CONFIG_SYNC_BASE", "").strip()
-        if not backend_sync_base:
-            backend_base = os.environ.get("BACKEND_BASE_INTERNAL", "http://127.0.0.1:8000").rstrip("/")
-            backend_sync_base = f"{backend_base}/api/ai/internal"
-
-        self._backend_sync_base = backend_sync_base.rstrip("/")
+        self._backend_sync_base = get_backend_config_sync_base().rstrip("/")
         self._sync_token = os.environ.get("AI_WEBHOOK_TOKEN", "")
         self._sync_secret = os.environ.get("AI_WEBHOOK_SECRET", "")
 
-        self.enroll_img_dir = enroll_img_dir or (Path(__file__).resolve().parent.parent.parent / "data" / "enroll_images")
+        self.enroll_img_dir = enroll_img_dir or get_ai_enroll_image_dir(Path(__file__).resolve().parent.parent.parent)
         self.enroll_img_dir.mkdir(parents=True, exist_ok=True)
 
         self._entities_by_id: Dict[str, Dict] = {}

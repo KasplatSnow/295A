@@ -8,9 +8,8 @@ from api.models import OutboxEvent
 class OutboxService:
     """Writes config-change events into the transactional outbox."""
 
+    @staticmethod
     def emit(
-        self,
-        *,
         aggregate_type: str,
         aggregate_id: str | int,
         event_type: str,
