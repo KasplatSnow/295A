@@ -1,4 +1,4 @@
-# 🛡️ VigilZone Monolith
+# 🛡️ VigilZone
 
 [![Security: AI-Powered](https://img.shields.io/badge/Security-AI--Powered-blueviolet)](https://github.com/SkiddieAhn/Paper-AnyAnomaly)
 [![Backend: Django](https://img.shields.io/badge/Backend-Django-092e20)](https://www.djangoproject.com/)
