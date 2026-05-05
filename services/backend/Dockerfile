@@ -3,7 +3,9 @@ FROM python:3.11-slim
 WORKDIR /app
 
 ARG DJANGO_SECRET_KEY_BUILD=docker-build-only-secret
+ARG DATABASE_URL_BUILD=postgresql://vigilzone:vigilzone@postgres:5432/vigilzone
 ENV DJANGO_SECRET_KEY=$DJANGO_SECRET_KEY_BUILD
+ENV DATABASE_URL=$DATABASE_URL_BUILD
 ENV DJANGO_DEBUG=0
 
 # Copy requirements first for better caching
