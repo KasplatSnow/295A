@@ -1,0 +1,26 @@
+logLevel: info
+
+rtsp: yes
+rtspAddress: :8554
+protocols: [tcp]
+
+hls: yes
+hlsAddress: :8888
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+
+api: yes
+apiAddress: :9997
+
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
