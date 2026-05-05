@@ -2,6 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+ARG DJANGO_SECRET_KEY_BUILD=docker-build-only-secret
+ENV DJANGO_SECRET_KEY=$DJANGO_SECRET_KEY_BUILD
+ENV DJANGO_DEBUG=0
+
 # Copy requirements first for better caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
