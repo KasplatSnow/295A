@@ -427,6 +427,25 @@ emit_post_deploy_report() {
     echo "- Static IP is expected; if disabled, restart can break WebRTC/CORS URLs."
 }
 
+run_compose_with_retries() {
+    local description="\$1"
+    shift
+    local attempt=1
+    local max_attempts=4
+    while true; do
+        if "\$@"; then
+            return 0
+        fi
+        if [ "\$attempt" -ge "\$max_attempts" ]; then
+            echo "ERROR: \$description failed after \$max_attempts attempts."
+            return 1
+        fi
+        echo "Retrying \$description (\$attempt/\$max_attempts) after transient failure..."
+        attempt=\$((attempt + 1))
+        sleep 10
+    done
+}
+
 find_compose_root() {
     local base_dir="\$1"
     local candidate=""
@@ -478,7 +497,8 @@ cd "\$COMPOSE_ROOT"
 \$COMPOSE_CMD down --remove-orphans --timeout 30 || true
 sudo docker container prune -f >/dev/null 2>&1 || true
 sudo docker network prune -f >/dev/null 2>&1 || true
-\$COMPOSE_CMD up --build -d --remove-orphans
+run_compose_with_retries "docker compose pull" \$COMPOSE_CMD pull --ignore-pull-failures || true
+run_compose_with_retries "docker compose up" \$COMPOSE_CMD up --build -d --remove-orphans
 
 wait_for_migrations || {
     \$COMPOSE_CMD ps
