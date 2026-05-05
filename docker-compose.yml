@@ -116,6 +116,7 @@ services:
       - "8554:8554"     # RTSP
       - "8889:8889"
       - "8888:8888"
+      - "8189:8189/udp"
     environment:
       - MTX_PROTOCOLS=tcp
       - MTX_API=yes
@@ -123,6 +124,7 @@ services:
       - MTX_WRITEQUEUESIZE=${MEDIAMTX_WRITE_QUEUE_SIZE:-2048}
       - MTX_READTIMEOUT=${MEDIAMTX_READ_TIMEOUT:-10s}
       - MTX_WRITETIMEOUT=${MEDIAMTX_WRITE_TIMEOUT:-10s}
+      - MTX_WEBRTCADDITIONALHOSTS=${MTX_WEBRTCADDITIONALHOSTS:-}
     ulimits:
       nofile:
         soft: 65536

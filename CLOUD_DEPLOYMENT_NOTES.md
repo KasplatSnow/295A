@@ -240,6 +240,7 @@ AI_USE_REDIS_PUBLISH=1
 MEDIAMTX_API_URL=http://mediamtx:9997
 MEDIAMTX_INTERNAL_RTSP_URL=rtsp://mediamtx:8554
 MEDIAMTX_EXTERNAL_URL=http://<VM_IP>:8888
+MTX_WEBRTCADDITIONALHOSTS=<VM_IP>
 VITE_API_BASE_URL=/api
 VITE_ENABLE_WEBRTC=true
 VITE_WEBRTC_VIEWER_BASE_URL=http://<VM_IP>:8889
@@ -249,6 +250,8 @@ NGINX_AI_UPSTREAM=ai:8080
 STRICT_SERVICE_URL_VALIDATION=1
 ALLOW_LOCALHOST_SERVICE_URLS=0
 ```
+
+Reserve a static external IP for the VM when possible. WebRTC and browser-facing URLs are much more stable when `MTX_WEBRTCADDITIONALHOSTS`, `CORS_ALLOWED_ORIGINS`, and the `VITE_*VIEWER_BASE_URL` values do not drift after a restart.
 
 For **Hybrid (Plan 3)**, replace `redis`, `postgres`, `ai`, `mediamtx` hostnames with actual cross-cloud IPs/DNS.
 
