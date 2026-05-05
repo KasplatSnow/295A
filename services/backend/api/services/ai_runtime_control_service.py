@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import requests as http_client
 
 from api.models import Camera, MediaMTXDesiredPath
-from api.services.camera_config_service import CameraConfigService
+from api.services.camera_config_service import CameraConfigService, MediaRelayMode
 from api.services.relay_reconciler import RelayReconciler
 from api.services.mediamtx_helpers import (
     get_ai_base_url,
@@ -172,8 +172,8 @@ def _ensure_desired_relay_path(camera: Camera) -> MediaMTXDesiredPath:
         source_uri=camera_config_service._resolve_source_uri(camera),
         source_kind=camera.source_kind or "",
         desired_enabled=True,
-        relay_mode=MediaMTTXDesiredPath.RelayMode.RELAY_ONLY,
-        transcode_required=False,
+        relay_mode=MediaRelayMode.from_camera(camera),
+        transcode_required=MediaRelayMode.transcode_required(camera),
     )
 
     try:
@@ -183,6 +183,16 @@ def _ensure_desired_relay_path(camera: Camera) -> MediaMTXDesiredPath:
         pass
 
     return desired_path
+
+
+def _best_effort_reconcile(desired_path: MediaMTXDesiredPath | None) -> None:
+    if desired_path is None:
+        return
+    try:
+        relay_reconciler.reconcile_one(desired_path)
+    except Exception:
+        # Readiness polling will surface the authoritative error state.
+        pass
 
 
 def wait_for_relay_readiness(
@@ -208,6 +218,7 @@ def wait_for_relay_readiness(
             last_error.waited_seconds = round(waited, 2)
             if error.status_code == 409 and not error.retryable:
                 raise last_error
+            _best_effort_reconcile(desired_path)
 
         if waited >= timeout_s:
             if last_error is None:
