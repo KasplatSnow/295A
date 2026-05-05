@@ -8,6 +8,7 @@ import requests as http_client
 
 from api.models import Camera, MediaMTXDesiredPath
 from api.services.camera_config_service import CameraConfigService
+from api.services.relay_reconciler import RelayReconciler
 from api.services.mediamtx_helpers import (
     get_ai_base_url,
     get_canonical_camera_id,
@@ -42,6 +43,7 @@ class RelayReadyState:
 
 camera_config_service = CameraConfigService()
 runtime_registration_service = RuntimeRegistrationService()
+relay_reconciler = RelayReconciler()
 
 
 def _relay_ready_timeout_seconds() -> float:
@@ -148,6 +150,41 @@ def _evaluate_relay_state(camera: Camera) -> tuple[MediaMTXDesiredPath | None, R
     return desired_path, None
 
 
+def _ensure_desired_relay_path(camera: Camera) -> MediaMTXDesiredPath:
+    desired_path = _get_desired_path(camera)
+    if desired_path is not None:
+        return desired_path
+
+    if camera.status != Camera.Status.ACTIVE:
+        raise RelayNotReadyError(
+            code="relay_inactive_camera",
+            detail=(
+                "This camera is not active yet, so its relay path has not been provisioned. "
+                "Activate the camera first, then retry Sync AI."
+            ),
+            status_code=409,
+            retryable=False,
+        )
+
+    desired_path = runtime_registration_service.set_desired_mediamtx_path(
+        camera=camera,
+        stream_path=camera.stream_path or camera.ai_camera_id or f"camera-{camera.pk}",
+        source_uri=camera_config_service._resolve_source_uri(camera),
+        source_kind=camera.source_kind or "",
+        desired_enabled=True,
+        relay_mode=MediaMTTXDesiredPath.RelayMode.RELAY_ONLY,
+        transcode_required=False,
+    )
+
+    try:
+        relay_reconciler.reconcile_one(desired_path)
+    except Exception:
+        # Best-effort bootstrap; readiness polling below will surface any remaining issue.
+        pass
+
+    return desired_path
+
+
 def wait_for_relay_readiness(
     camera: Camera,
     *,
@@ -231,6 +268,7 @@ def start_ai_runtime(
     sample_hz: float = 2.0,
     policy_version: int = 1,
 ) -> dict:
+    _ensure_desired_relay_path(camera)
     ready_state = wait_for_relay_readiness(camera)
     stream_path = ready_state.desired_path.stream_path
     payload = build_ai_registration_payload(
