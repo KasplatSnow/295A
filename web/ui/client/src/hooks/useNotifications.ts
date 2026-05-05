@@ -45,6 +45,10 @@ export interface UseNotificationsReturn {
   clearNotifications: () => void;
 }
 
+const MAX_HEALTH_FAILURES = 3;
+const BASE_RECONNECT_DELAY_MS = 1000;
+const MAX_RECONNECT_DELAY_MS = 15000;
+
 function normalizeId(value: unknown): string | undefined {
   if (value === null || value === undefined) return undefined;
   const normalized = String(value).trim();
@@ -140,11 +144,24 @@ export function useNotifications(): UseNotificationsReturn {
   const tokenRef = useRef<string | null>(null);
   const tenantIdRef = useRef<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const sessionGenerationRef = useRef(0);
+  const activeSessionRef = useRef<{ token: string | null; tenantId: number | null }>({
+    token: null,
+    tenantId: null,
+  });
   const healthIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const healthFailureCountRef = useRef(0);
   const processedAlertIds = useRef<Set<string>>(new Set());
   const audioUnlockedRef = useRef(false);
+
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
 
   const stopHealthPolling = useCallback(() => {
     if (healthIntervalRef.current) {
@@ -168,7 +185,7 @@ export function useNotifications(): UseNotificationsReturn {
       if (!response.ok) {
         setRedisReachable(false);
         healthFailureCountRef.current += 1;
-        if (healthFailureCountRef.current >= 3) {
+        if (healthFailureCountRef.current >= MAX_HEALTH_FAILURES) {
           stopHealthPolling();
         }
         return;
@@ -179,7 +196,7 @@ export function useNotifications(): UseNotificationsReturn {
     } catch {
       setRedisReachable(false);
       healthFailureCountRef.current += 1;
-      if (healthFailureCountRef.current >= 3) {
+      if (healthFailureCountRef.current >= MAX_HEALTH_FAILURES) {
         stopHealthPolling();
       }
     }
@@ -256,6 +273,23 @@ export function useNotifications(): UseNotificationsReturn {
     }
   }, []);
 
+  const disconnect = useCallback(() => {
+    sessionGenerationRef.current += 1;
+    clearReconnectTimer();
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    stopHealthPolling();
+    reconnectAttemptRef.current = 0;
+    activeSessionRef.current = { token: null, tenantId: null };
+    tokenRef.current = null;
+    tenantIdRef.current = null;
+    setIsConnected(false);
+    setIsSubscribed(false);
+    setRedisReachable(false);
+  }, [clearReconnectTimer, setIsConnected, stopHealthPolling]);
+
   const connect = useCallback((tenantId: number) => {
     const token = getStoredToken();
     if (!token) {
@@ -271,13 +305,27 @@ export function useNotifications(): UseNotificationsReturn {
       return;
     }
 
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+    if (
+      activeSessionRef.current.token === token &&
+      activeSessionRef.current.tenantId === tenantId &&
+      abortControllerRef.current
+    ) {
+      return;
     }
 
+    sessionGenerationRef.current += 1;
+    const generation = sessionGenerationRef.current;
+    clearReconnectTimer();
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     tokenRef.current = token;
     tenantIdRef.current = tenantId;
+    activeSessionRef.current = { token, tenantId };
+    reconnectAttemptRef.current = 0;
     setError(null);
+    setIsConnected(false);
     setIsSubscribed(false);
 
     hydrateNotifications(token, tenantId);
@@ -287,6 +335,29 @@ export function useNotifications(): UseNotificationsReturn {
     const sseUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}&tenant_id=${tenantId}`;
     const ctrl = new AbortController();
     abortControllerRef.current = ctrl;
+
+    const scheduleReconnect = () => {
+      if (
+        generation !== sessionGenerationRef.current ||
+        !activeSessionRef.current.token ||
+        !activeSessionRef.current.tenantId
+      ) {
+        return;
+      }
+
+      reconnectAttemptRef.current += 1;
+      const delay = Math.min(
+        MAX_RECONNECT_DELAY_MS,
+        BASE_RECONNECT_DELAY_MS * (2 ** Math.max(0, reconnectAttemptRef.current - 1)),
+      );
+      clearReconnectTimer();
+      reconnectTimerRef.current = setTimeout(() => {
+        if (generation !== sessionGenerationRef.current || tenantIdRef.current === null) {
+          return;
+        }
+        connect(tenantIdRef.current);
+      }, delay);
+    };
 
     const connectSse = async () => {
       try {
@@ -299,10 +370,14 @@ export function useNotifications(): UseNotificationsReturn {
           },
           signal: ctrl.signal,
           async onopen(response) {
+            if (generation !== sessionGenerationRef.current || ctrl.signal.aborted) {
+              throw new DOMException('Stale notification stream', 'AbortError');
+            }
             if (response.status === 401) {
               throw new Error("unauthorized");
             }
             if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
+              reconnectAttemptRef.current = 0;
               setIsConnected(true);
               setError(null);
             } else {
@@ -310,6 +385,9 @@ export function useNotifications(): UseNotificationsReturn {
             }
           },
           onmessage(event) {
+            if (generation !== sessionGenerationRef.current || ctrl.signal.aborted) {
+              return;
+            }
             try {
               if (event.event === 'ping') return;
               
@@ -357,20 +435,32 @@ export function useNotifications(): UseNotificationsReturn {
             }
           },
           onclose() {
-            console.log('[SSE] Connection closed.');
+            if (generation !== sessionGenerationRef.current || ctrl.signal.aborted) {
+              return;
+            }
+            console.log('[SSE] Connection closed. Scheduling reconnect.');
             setIsConnected(false);
             setIsSubscribed(false);
+            scheduleReconnect();
           },
           onerror(err) {
+            if (generation !== sessionGenerationRef.current || ctrl.signal.aborted) {
+              return;
+            }
             if (err instanceof Error && err.message === "unauthorized") {
               console.log('[SSE] Unauthorized error detected. Triggering token refresh...');
               
               // Trigger a dummy request through the 'api' instance to invoke the refresh interceptor
               import('@/lib/api').then(({ api }) => {
+                if (generation !== sessionGenerationRef.current || ctrl.signal.aborted) {
+                  return;
+                }
                 api.get('/auth/context/').then(() => {
                   console.log('[SSE] Token refreshed, reconnecting...');
-                  disconnect();
-                  if (tenantIdRef.current) connect(tenantIdRef.current);
+                  if (generation !== sessionGenerationRef.current || tenantIdRef.current === null) {
+                    return;
+                  }
+                  connect(tenantIdRef.current);
                 }).catch(() => {
                   console.error('[SSE] Token refresh failed or session expired.');
                   setError('Session expired. Please log in again.');
@@ -384,32 +474,29 @@ export function useNotifications(): UseNotificationsReturn {
             setError('SSE connection error');
             setIsConnected(false);
             setIsSubscribed(false);
+            scheduleReconnect();
           }
         });
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
           console.log('[SSE] Connection aborted intentionally.');
+          return;
         } else {
           console.error('[SSE] Failed to connect:', err);
           setError('Failed to connect to notification server');
+        }
+
+        if (generation === sessionGenerationRef.current && !ctrl.signal.aborted) {
+          setIsConnected(false);
+          setIsSubscribed(false);
+          scheduleReconnect();
         }
       }
     };
 
     connectSse();
 
-  }, [hydrateNotifications, startHealthPolling, stopHealthPolling, queryClient, setIsConnected]);
-
-  const disconnect = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    stopHealthPolling();
-    setIsConnected(false);
-    setIsSubscribed(false);
-    setRedisReachable(false);
-  }, [stopHealthPolling]);
+  }, [clearReconnectTimer, disconnect, hydrateNotifications, queryClient, setIsConnected, startHealthPolling]);
 
   const markAsRead = useCallback(async (notificationIds: string[]) => {
     const token = getStoredToken();

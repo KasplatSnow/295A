@@ -47,13 +47,15 @@ export function useMediamtxHealth(): UseMediamtxHealthResult {
           }
         }
 
-        // Fallback or lightweight check if API check is disabled or failed
+        // Any HTTP response from the WebRTC listener proves reachability, even if `/` is not routable.
         const fallbackRes = await fetch(`${baseUrl.replace(/\/$/, "")}/`, {
           method: "HEAD",
-          mode: "no-cors",
           signal: controller.signal,
         });
-        return { reachable: true, activePaths: new Set<string>() };
+        return {
+          reachable: fallbackRes.ok || fallbackRes.status === 404 || fallbackRes.type === "opaque",
+          activePaths: new Set<string>(),
+        };
       } catch (err) {
         return { reachable: false, activePaths: new Set<string>() };
       } finally {
