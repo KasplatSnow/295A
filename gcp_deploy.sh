@@ -14,27 +14,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-find_repo_root() {
-    local dir="$1"
-    while true; do
-        if [ -f "$dir/docker-compose.yml" ] || [ -f "$dir/compose.yml" ] || [ -f "$dir/docker-compose.yaml" ] || [ -f "$dir/compose.yaml" ]; then
-            echo "$dir"
-            return 0
-        fi
-        if [ "$dir" = "/" ]; then
-            return 1
-        fi
-        dir="$(dirname "$dir")"
-    done
-}
-
-PROJECT_ROOT="$(find_repo_root "$SCRIPT_DIR" || true)"
-if [ -z "$PROJECT_ROOT" ]; then
-    echo "ERROR: Could not find repo root (docker-compose.yml) starting from: $SCRIPT_DIR"
-    echo "Run this script from inside the VigilZone repo, or place it under the repo tree."
-    exit 1
-fi
 PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
 
 INSTANCE_NAME="${INSTANCE_NAME:-vigilzone-monolith}"
