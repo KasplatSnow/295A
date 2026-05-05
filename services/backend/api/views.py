@@ -808,34 +808,6 @@ def dashboard_summary(request):
         "camera_live": cameras_aggs["live"],
     }
 
-    cameras = []
-    for cam in cameras_qs:
-        # Convert rtsp_url presence to a safe boolean for the UI (hide credentials)
-        cam["has_stream"] = bool(cam.pop("rtsp_url", None))
-        cam["is_ai_synced"] = ai_sync_state.get(cam["id"], False)
-        cameras.append(cam)
-
-    active_cameras = sum(1 for cam in cameras if cam.get("status") == Camera.Status.ACTIVE)
-
-    # Incident counts - collapsed into single DB query
-    aggs = incidents.aggregate(
-        today=Count('id', filter=Q(started_at__gte=today_start)),
-        week=Count('id', filter=Q(started_at__gte=week_start)),
-        month=Count('id', filter=Q(started_at__gte=month_start)),
-        open=Count('id', filter=Q(status=Incident.Status.OPEN)),
-        critical=Count('id', filter=Q(severity__gte=4, started_at__gte=today_start)),
-    )
-
-    stats = {
-        "today": aggs["today"],
-        "week": aggs["week"],
-        "month": aggs["month"],
-        "open": aggs["open"],
-        "critical": aggs["critical"],
-        "camera_total": len(cameras),
-        "camera_live": active_cameras,
-    }
-
     # Recent incidents (last 10)
     recent_incidents = list(
         incidents.order_by("-started_at")[:10].values(
