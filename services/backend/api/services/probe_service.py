@@ -16,6 +16,16 @@ from api.services.mediamtx_helpers import (
 logger = logging.getLogger(__name__)
 
 
+def _extract_jpeg_from_multipart(buffer: bytes) -> bytes | None:
+    start = buffer.find(b"\xff\xd8")
+    if start == -1:
+        return None
+    end = buffer.find(b"\xff\xd9", start + 2)
+    if end == -1:
+        return None
+    return buffer[start:end + 2]
+
+
 class ProbeService:
     """Service to handle tiered camera connection testing.
 
@@ -107,3 +117,100 @@ class ProbeService:
         """Gate 2: Bounded final media verification via ffprobe."""
         from api.services.mediamtx_helpers import _probe_rtsp
         return _probe_rtsp(loopback_url, timeout_s=timeout_s)
+
+    @staticmethod
+    def run_http_media_probe(url: str, source_kind: str, timeout_s: int = 5) -> dict:
+        """Final media verification for direct HTTP snapshot/MJPEG sources."""
+        started = time.monotonic()
+        try:
+            if source_kind == "snapshot":
+                resp = requests.get(url, timeout=timeout_s)
+                content_type = str(resp.headers.get("Content-Type", ""))
+                if resp.status_code == 200 and "image" in content_type and resp.content:
+                    return {
+                        "ok": True,
+                        "method": "http_snapshot",
+                        "latency_ms": int((time.monotonic() - started) * 1000),
+                        "details": {
+                            "content_type": content_type,
+                            "bytes": len(resp.content),
+                        },
+                    }
+                return {
+                    "ok": False,
+                    "category": "http_media_invalid",
+                    "method": "http_snapshot",
+                    "latency_ms": int((time.monotonic() - started) * 1000),
+                    "error": f"Snapshot endpoint returned HTTP {resp.status_code}",
+                }
+
+            if source_kind == "mjpeg":
+                with requests.get(url, stream=True, timeout=(3.0, timeout_s)) as resp:
+                    content_type = str(resp.headers.get("Content-Type", "")).lower()
+                    if resp.status_code != 200:
+                        return {
+                            "ok": False,
+                            "category": "http_media_invalid",
+                            "method": "http_mjpeg",
+                            "latency_ms": int((time.monotonic() - started) * 1000),
+                            "error": f"MJPEG endpoint returned HTTP {resp.status_code}",
+                        }
+                    if "multipart" not in content_type and "mjpeg" not in content_type and "jpeg" not in content_type:
+                        return {
+                            "ok": False,
+                            "category": "http_media_invalid",
+                            "method": "http_mjpeg",
+                            "latency_ms": int((time.monotonic() - started) * 1000),
+                            "error": f"Unexpected content type: {content_type or 'unknown'}",
+                        }
+
+                    buffer = bytearray()
+                    for chunk in resp.iter_content(chunk_size=4096):
+                        if not chunk:
+                            continue
+                        buffer.extend(chunk)
+                        jpeg = _extract_jpeg_from_multipart(buffer)
+                        if jpeg:
+                            return {
+                                "ok": True,
+                                "method": "http_mjpeg",
+                                "latency_ms": int((time.monotonic() - started) * 1000),
+                                "details": {
+                                    "content_type": content_type,
+                                    "bytes": len(jpeg),
+                                },
+                            }
+                        if len(buffer) > 2_000_000:
+                            break
+
+                    return {
+                        "ok": False,
+                        "category": "http_media_invalid",
+                        "method": "http_mjpeg",
+                        "latency_ms": int((time.monotonic() - started) * 1000),
+                        "error": "Could not extract a JPEG frame from MJPEG stream",
+                    }
+        except requests.Timeout:
+            return {
+                "ok": False,
+                "category": "http_media_timeout",
+                "method": f"http_{source_kind}",
+                "latency_ms": int((time.monotonic() - started) * 1000),
+                "error": f"Timed out after {timeout_s}s reading {source_kind} source",
+            }
+        except requests.RequestException as exc:
+            return {
+                "ok": False,
+                "category": "http_media_error",
+                "method": f"http_{source_kind}",
+                "latency_ms": int((time.monotonic() - started) * 1000),
+                "error": str(exc),
+            }
+
+        return {
+            "ok": False,
+            "category": "unsupported_source",
+            "method": f"http_{source_kind}",
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "error": f"Unsupported HTTP media source kind: {source_kind}",
+        }

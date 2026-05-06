@@ -885,6 +885,61 @@ class StreamEndpointTests(APITestCase):
         ],
     },
 )
+class CameraConnectionProbeTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username='probeuser', email='probe@test.com', password='password123')
+        self.tenant = Tenant.objects.create(name='Probe Tenant')
+        Membership.objects.create(user=self.user, tenant=self.tenant, role='owner')
+        self.camera = Camera.objects.create(
+            tenant=self.tenant,
+            name='MJPEG Camera',
+            rtsp_url='http://195.196.36.242/mjpg/video.mjpg',
+            source_kind='mjpeg',
+            status='active',
+        )
+
+        response = self.client.post('/api/auth/token/', {'username': 'probeuser', 'password': 'password123'}, format='json')
+        self.token = response.data['access']
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f'Bearer {self.token}',
+            HTTP_X_TENANT_ID=str(self.tenant.id),
+        )
+
+    @patch('api.services.probe_service.requests.get')
+    @patch('api.services.probe_service.requests.head')
+    def test_test_connection_uses_direct_http_probe_for_mjpeg(self, mock_head, mock_get):
+        mock_head.return_value = MagicMock(status_code=405)
+
+        stream_resp = MagicMock()
+        stream_resp.__enter__.return_value = stream_resp
+        stream_resp.__exit__.return_value = None
+        stream_resp.status_code = 200
+        stream_resp.headers = {'Content-Type': 'multipart/x-mixed-replace; boundary=frame'}
+        stream_resp.iter_content.return_value = iter([
+            b'--frame\r\nContent-Type: image/jpeg\r\n\r\n',
+            b'\xff\xd8jpeg-bytes\xff\xd9\r\n',
+        ])
+        mock_get.return_value = stream_resp
+
+        response = self.client.post(f'/api/cameras/{self.camera.id}/test_connection/', {'timeout_s': 10}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['ok'])
+        self.assertEqual(response.data['method'], 'http_mjpeg')
+        self.assertEqual(response.data['source_kind'], 'mjpeg')
+
+
+@override_settings(
+    REST_FRAMEWORK={
+        'DEFAULT_AUTHENTICATION_CLASSES': [
+            'rest_framework_simplejwt.authentication.JWTAuthentication',
+        ],
+        'DEFAULT_PERMISSION_CLASSES': [
+            'rest_framework.permissions.IsAuthenticated',
+        ],
+    },
+)
 class AiControlPlaneTests(APITestCase):
     def setUp(self):
         self.client = APIClient()

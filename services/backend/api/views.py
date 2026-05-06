@@ -512,6 +512,11 @@ class CameraViewSet(TenantScopedViewSet):
                 "source_kind": source_kind
             })
 
+        if source_kind in {"mjpeg", "snapshot"}:
+            probe_result = ProbeService.run_http_media_probe(rtsp_url, source_kind, timeout_s=timeout_s)
+            probe_result.setdefault("source_kind", source_kind)
+            return Response(probe_result)
+
         api_base = get_mediamtx_api_base()
         
         # Decide if we need to provision a temporary path.
