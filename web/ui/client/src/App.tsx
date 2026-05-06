@@ -1,4 +1,4 @@
-import { Switch, Route, Redirect } from "wouter";
+import { Switch, Route, Redirect, useLocation } from "wouter";
 import React, { Suspense, useEffect } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -40,97 +40,104 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   );
 }
 
+const APP_SHELL_PREFIXES = [
+  "/dashboard",
+  "/incidents",
+  "/entities",
+  "/community",
+  "/select-community",
+  "/reports",
+  "/cameras",
+  "/live-ai",
+  "/settings",
+  "/debug",
+] as const;
+
+function AppShellRoutes() {
+  return (
+    <Switch>
+      <Route path="/dashboard">
+        <TenantOnlyRoute>
+          <Dashboard />
+        </TenantOnlyRoute>
+      </Route>
+      <Route path="/incidents">
+        <TenantOnlyRoute>
+          <Incidents />
+        </TenantOnlyRoute>
+      </Route>
+      <Route path="/incidents/:id">
+        <TenantOnlyRoute>
+          <IncidentDetails />
+        </TenantOnlyRoute>
+      </Route>
+      <Route path="/entities">
+        <TenantOnlyRoute>
+          <Entities />
+        </TenantOnlyRoute>
+      </Route>
+      <Route path="/community">
+        <TenantOnlyRoute>
+          <Community />
+        </TenantOnlyRoute>
+      </Route>
+      <Route path="/select-community">
+        <AuthOnlyRoute>
+          <SelectCommunity />
+        </AuthOnlyRoute>
+      </Route>
+      <Route path="/reports">
+        <TenantOnlyRoute>
+          <Reports />
+        </TenantOnlyRoute>
+      </Route>
+      <Route path="/cameras">
+        <TenantOnlyRoute>
+          <Cameras />
+        </TenantOnlyRoute>
+      </Route>
+      <Route path="/live-ai">
+        <TenantOnlyRoute>
+          <LiveAI />
+        </TenantOnlyRoute>
+      </Route>
+      <Route path="/settings">
+        <TenantOnlyRoute>
+          <Settings />
+        </TenantOnlyRoute>
+      </Route>
+      <Route path="/debug">
+        <TenantOnlyRoute>
+          <Debug />
+        </TenantOnlyRoute>
+      </Route>
+      <Route component={NotFound} />
+    </Switch>
+  );
+}
+
 function Router() {
+  const [location] = useLocation();
+  const usesAppShell = APP_SHELL_PREFIXES.some(
+    (prefix) => location === prefix || location.startsWith(`${prefix}/`),
+  );
+
   return (
     <Suspense fallback={<LoadingDisplay />}>
-      <Switch>
-        {/* Redirect root to dashboard */}
-        <Route path="/">
-          <Redirect to="/dashboard" />
-        </Route>
-        <PublicOnlyRoute path="/login" component={Login} />
-        <PublicOnlyRoute path="/register" component={Register} />
-        <PublicOnlyRoute path="/forgot-password" component={ForgotPassword} />
-
-        <Route path="/dashboard">
-          <TenantOnlyRoute>
-            <AuthenticatedLayout>
-              <Dashboard />
-            </AuthenticatedLayout>
-          </TenantOnlyRoute>
-        </Route>
-        <Route path="/incidents">
-          <TenantOnlyRoute>
-            <AuthenticatedLayout>
-              <Incidents />
-            </AuthenticatedLayout>
-          </TenantOnlyRoute>
-        </Route>
-        <Route path="/incidents/:id">
-          <TenantOnlyRoute>
-            <AuthenticatedLayout>
-              <IncidentDetails />
-            </AuthenticatedLayout>
-          </TenantOnlyRoute>
-        </Route>
-        <Route path="/entities">
-          <TenantOnlyRoute>
-            <AuthenticatedLayout>
-              <Entities />
-            </AuthenticatedLayout>
-          </TenantOnlyRoute>
-        </Route>
-        <Route path="/community">
-          <TenantOnlyRoute>
-            <AuthenticatedLayout>
-              <Community />
-            </AuthenticatedLayout>
-          </TenantOnlyRoute>
-        </Route>
-        <Route path="/select-community">
-          <AuthOnlyRoute>
-            <AuthenticatedLayout>
-              <SelectCommunity />
-            </AuthenticatedLayout>
-          </AuthOnlyRoute>
-        </Route>
-        <Route path="/reports">
-          <TenantOnlyRoute>
-            <AuthenticatedLayout>
-              <Reports />
-            </AuthenticatedLayout>
-          </TenantOnlyRoute>
-        </Route>
-        <Route path="/cameras">
-          <TenantOnlyRoute>
-            <AuthenticatedLayout>
-              <Cameras />
-            </AuthenticatedLayout>
-          </TenantOnlyRoute>
-        </Route>
-        <Route path="/live-ai">
-          <TenantOnlyRoute>
-            <AuthenticatedLayout>
-              <LiveAI />
-            </AuthenticatedLayout>
-          </TenantOnlyRoute>
-        </Route>
-        <Route path="/settings">
-          <TenantOnlyRoute>
-            <AuthenticatedLayout>
-              <Settings />
-            </AuthenticatedLayout>
-          </TenantOnlyRoute>
-        </Route>
-        <Route path="/debug">
-          <TenantOnlyRoute>
-            <AuthenticatedLayout>
-              <Debug />
-            </AuthenticatedLayout>
-          </TenantOnlyRoute>
-        </Route>
-        <Route component={NotFound} />
-      </Switch>
+      {location === "/" ? (
+        <Redirect to="/dashboard" />
+      ) : usesAppShell ? (
+        <AuthenticatedLayout>
+          <AppShellRoutes />
+        </AuthenticatedLayout>
+      ) : (
+        <Switch>
+          <PublicOnlyRoute path="/login" component={Login} />
+          <PublicOnlyRoute path="/register" component={Register} />
+          <PublicOnlyRoute path="/forgot-password" component={ForgotPassword} />
+          <Route component={NotFound} />
+        </Switch>
+      )}
     </Suspense>
   );
 }

@@ -21,6 +21,8 @@ from .realtime_notifications import (
 
 logger = logging.getLogger(__name__)
 
+HEARTBEAT_INTERVAL_SECONDS = 10
+
 class NotificationSSEConsumer(AsyncHttpConsumer):
     """
     SSE consumer for real-time tenant notifications.
@@ -34,7 +36,8 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
         self.tenant_id: Optional[int] = None
         self.group_name: Optional[str] = None
         self.heartbeat_task: Optional[asyncio.Task] = None
-        self._disconnect_event = asyncio.Event()
+        self._shutdown_event = asyncio.Event()
+        self._send_lock = asyncio.Lock()
         self._cleanup_lock = asyncio.Lock()
         self._cleanup_complete = False
 
@@ -119,23 +122,23 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
                 "message": f"Connected to tenant {self.tenant_id} notifications via SSE",
                 "tenant_id": self.tenant_id
             }
-            await self.send_body(encode_sse("connected", welcome_data), more_body=True)
+            await self._send_event("connected", welcome_data)
 
             # 7. Start heartbeat task to keep proxy connections alive
             self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-            # Keep the stream alive until ASGI signals a client disconnect.
-            await self._disconnect_event.wait()
+            # Keep the stream alive until either the client disconnects or a send fails.
+            await self._shutdown_event.wait()
         except asyncio.CancelledError:
+            self._shutdown_event.set()
             logger.debug(f"SSE connection for user {self.user.username} cancelled by server.")
             raise
         finally:
             await self._cleanup()
 
     async def disconnect(self):
-        """Handle a client-initiated disconnect without waiting for Daphne to kill the task."""
-        self._disconnect_event.set()
-        await self._cleanup()
+        """Signal shutdown when the ASGI server reports a client disconnect."""
+        self._shutdown_event.set()
 
     async def _cleanup(self):
         async with self._cleanup_lock:
@@ -144,12 +147,15 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
             self._cleanup_complete = True
 
             if self.heartbeat_task:
+                heartbeat_task = self.heartbeat_task
                 self.heartbeat_task.cancel()
+                self.heartbeat_task = None
                 try:
-                    await self.heartbeat_task
+                    await heartbeat_task
                 except asyncio.CancelledError:
                     pass
-                self.heartbeat_task = None
+                except Exception:
+                    pass
 
             if self.group_name:
                 try:
@@ -167,17 +173,39 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
                 f"disconnected from tenant {self.tenant_id} SSE notifications"
             )
 
+    async def _send_event(self, event_name: str, data: dict, event_id: Optional[str] = None):
+        if self._shutdown_event.is_set():
+            return
+
+        payload = encode_sse(event_name, data, event_id=event_id)
+        try:
+            async with self._send_lock:
+                await self.send_body(payload, more_body=True)
+        except asyncio.CancelledError:
+            self._shutdown_event.set()
+            raise
+        except Exception as exc:
+            self._shutdown_event.set()
+            raise RuntimeError(f"SSE send failed: {exc}") from exc
+
     async def _heartbeat_loop(self):
         """Send a lightweight event periodically to prevent proxy timeouts."""
         try:
-            while True:
-                await asyncio.sleep(20)
-                await self.send_body(encode_sse("ping", {"time": timezone.now().isoformat()}), more_body=True)
+            while not self._shutdown_event.is_set():
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(),
+                        timeout=HEARTBEAT_INTERVAL_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    await self._send_event("ping", {"time": timezone.now().isoformat()})
         except asyncio.CancelledError:
             # Expected on connection close
             pass
         except Exception as e:
-            logger.error(f"Heartbeat loop error: {e}")
+            if not self._shutdown_event.is_set():
+                logger.info(f"SSE heartbeat loop ending after send failure: {e}")
+                self._shutdown_event.set()
 
     # ── Channel message handlers ───────────────────────────────
 
@@ -195,10 +223,10 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
             
         try:
             event_id = str(data.get("alert_id", "")) if data.get("alert_id") else None
-            payload_bytes = encode_sse("notification", data, event_id=event_id)
-            await self.send_body(payload_bytes, more_body=True)
+            await self._send_event("notification", data, event_id=event_id)
         except Exception as e:
-            logger.error(f"Failed to push SSE message: {e}")
+            if not self._shutdown_event.is_set():
+                logger.error(f"Failed to push SSE message: {e}")
 
     async def broadcast_message(self, event):
         """
@@ -206,7 +234,7 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
         """
         try:
             data = event.get("data", {})
-            payload_bytes = encode_sse("broadcast", data)
-            await self.send_body(payload_bytes, more_body=True)
+            await self._send_event("broadcast", data)
         except Exception as e:
-            logger.error(f"Failed to push SSE broadcast: {e}")
+            if not self._shutdown_event.is_set():
+                logger.error(f"Failed to push SSE broadcast: {e}")

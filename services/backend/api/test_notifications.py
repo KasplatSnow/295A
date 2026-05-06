@@ -10,6 +10,8 @@ Tests cover:
 
 import json
 import os
+import asyncio
+from types import SimpleNamespace
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APITestCase, APIClient
@@ -17,11 +19,13 @@ from rest_framework import status
 from django.contrib.auth.models import User
 from django.utils import timezone
 from datetime import timedelta
+from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from api.models import (
     Tenant, Membership, Camera, Incident, Alert, 
 )
+from api.consumers_sse import NotificationSSEConsumer
 from api.notification_service import NotificationService, dispatch_notifications
 from ai_integration.incident_ingest import process_alert_event
 
@@ -732,3 +736,48 @@ class SyncedAiIncidentNotificationTests(TestCase):
         self.assertEqual(incident.camera_id, webcam_camera.id)
         self.assertEqual(mock_broadcast.call_count, 1)
         self.assertEqual(mock_broadcast.call_args[0][0].pk, incident.pk)
+
+
+class NotificationSSEConsumerTests(IsolatedAsyncioTestCase):
+    """Behavioral tests for SSE send failure and shutdown cleanup."""
+
+    async def asyncSetUp(self):
+        self.consumer = NotificationSSEConsumer()
+        self.consumer.user = SimpleNamespace(username="sse-user")
+        self.consumer.tenant_id = 1
+        self.consumer.group_name = "tenant_notifications_1"
+        self.consumer.channel_name = "test-channel"
+        self.consumer.channel_layer = SimpleNamespace(group_discard=AsyncMock())
+        self.consumer.send_body = AsyncMock()
+        self.consumer._shutdown_event = asyncio.Event()
+        self.consumer._send_lock = asyncio.Lock()
+        self.consumer._cleanup_lock = asyncio.Lock()
+        self.consumer._cleanup_complete = False
+        self.consumer.heartbeat_task = None
+
+    async def test_send_event_sets_shutdown_event_when_socket_send_fails(self):
+        """A broken socket should mark the stream for shutdown immediately."""
+        self.consumer.send_body.side_effect = RuntimeError("socket closed")
+
+        with self.assertRaises(RuntimeError):
+            await self.consumer._send_event("ping", {"ok": True})
+
+        self.assertTrue(self.consumer._shutdown_event.is_set())
+
+    async def test_cleanup_is_idempotent_and_discards_group_once(self):
+        """Cleanup should cancel heartbeat work and only discard the group once."""
+        blocker = asyncio.Event()
+
+        async def wait_forever():
+            await blocker.wait()
+
+        self.consumer.heartbeat_task = asyncio.create_task(wait_forever())
+
+        await self.consumer._cleanup()
+        await self.consumer._cleanup()
+
+        self.consumer.channel_layer.group_discard.assert_awaited_once_with(
+            "tenant_notifications_1",
+            "test-channel",
+        )
+        self.assertIsNone(self.consumer.heartbeat_task)
