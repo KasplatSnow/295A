@@ -7,7 +7,8 @@ from typing import Optional
 
 from urllib.parse import parse_qs
 
-from channels.generic.http import AsyncHttpConsumer
+from channels.consumer import AsyncConsumer
+from channels.exceptions import StopConsumer
 from django.utils import timezone
 
 from .realtime_notifications import (
@@ -23,15 +24,17 @@ logger = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL_SECONDS = 10
 
-class NotificationSSEConsumer(AsyncHttpConsumer):
+class NotificationSSEConsumer(AsyncConsumer):
     """
     SSE consumer for real-time tenant notifications.
+
+    This intentionally uses the low-level HTTP ASGI events instead of
+    AsyncHttpConsumer.handle(). A long-running handle coroutine prevents Channels
+    from dispatching http.disconnect promptly, which causes Daphne to kill the
+    application instance during browser refreshes.
     """
-    
-    async def handle(self, body):
-        """
-        Handle the incoming HTTP request to open the SSE stream.
-        """
+
+    def _init_state(self) -> None:
         self.user = None
         self.tenant_id: Optional[int] = None
         self.group_name: Optional[str] = None
@@ -40,17 +43,27 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
         self._send_lock = asyncio.Lock()
         self._cleanup_lock = asyncio.Lock()
         self._cleanup_complete = False
+        self._stream_started = False
+
+    async def http_request(self, message):
+        """
+        Handle the incoming HTTP request to open the SSE stream.
+        """
+        if getattr(self, "_stream_started", False):
+            return
+
+        self._init_state()
 
         # Handle CORS preflight (OPTIONS request)
         method = self.scope.get("method", "").upper()
         if method == "OPTIONS":
-            await self.send_response(200, b"", headers=[
+            await self._send_response(200, b"", headers=[
                 (b"Access-Control-Allow-Origin", b"*"),
                 (b"Access-Control-Allow-Methods", b"GET, OPTIONS"),
                 (b"Access-Control-Allow-Headers", b"Authorization, X-Tenant-ID"),
                 (b"Access-Control-Max-Age", b"86400"),
             ])
-            return
+            raise StopConsumer()
 
         # 1. Extract credentials from Query Params or Headers
         # (EventSource does not support custom headers, so query params are the primary for SSE)
@@ -68,11 +81,11 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
         self.user = await authenticate_user_from_bearer(token)
         if not self.user:
             logger.warning(f"SSE connection rejected: authentication failed (token_present={bool(token)})")
-            await self.send_response(401, b"Unauthorized", headers=[
+            await self._send_response(401, b"Unauthorized", headers=[
                 (b"Content-Type", b"text/plain"),
                 (b"Access-Control-Allow-Origin", b"*"),
             ])
-            return
+            raise StopConsumer()
 
         # 2. Extract tenant identification
         tenant_val = query_params.get("tenant_id", [None])[0]
@@ -83,28 +96,33 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
         
         if not self.tenant_id:
             logger.warning("SSE connection rejected: missing or invalid X-Tenant-ID")
-            await self.send_response(400, b"Bad Request: Missing X-Tenant-ID", headers=[
+            await self._send_response(400, b"Bad Request: Missing X-Tenant-ID", headers=[
                 (b"Content-Type", b"text/plain"),
                 (b"Access-Control-Allow-Origin", b"*"),
             ])
-            return
+            raise StopConsumer()
 
         # 3. Verify membership
         if not await verify_tenant_membership(self.user, self.tenant_id):
             logger.warning(f"SSE connection rejected: user {self.user.id} not member of tenant {self.tenant_id}")
-            await self.send_response(403, b"Forbidden", headers=[
+            await self._send_response(403, b"Forbidden", headers=[
                 (b"Content-Type", b"text/plain"),
                 (b"Access-Control-Allow-Origin", b"*"),
             ])
-            return
+            raise StopConsumer()
 
         # 4. Accept SSE connection
-        await self.send_headers(headers=[
-            (b"Cache-Control", b"no-cache"),
-            (b"Content-Type", b"text/event-stream"),
-            (b"Connection", b"keep-alive"),
-            (b"Access-Control-Allow-Origin", b"*"),
-        ])
+        await self.send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                (b"Cache-Control", b"no-cache"),
+                (b"Content-Type", b"text/event-stream"),
+                (b"Connection", b"keep-alive"),
+                (b"Access-Control-Allow-Origin", b"*"),
+            ],
+        })
+        self._stream_started = True
 
         # 5. Join group
         self.group_name = build_group_name(self.tenant_id)
@@ -126,19 +144,33 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
 
             # 7. Start heartbeat task to keep proxy connections alive
             self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-
-            # Keep the stream alive until either the client disconnects or a send fails.
-            await self._shutdown_event.wait()
         except asyncio.CancelledError:
             self._shutdown_event.set()
             logger.debug(f"SSE connection for user {self.user.username} cancelled by server.")
             raise
-        finally:
+        except Exception:
             await self._cleanup()
+            raise StopConsumer()
 
-    async def disconnect(self):
-        """Signal shutdown when the ASGI server reports a client disconnect."""
+    async def http_disconnect(self, message):
+        """Cleanly stop background tasks as soon as the client disconnects."""
+        if not hasattr(self, "_shutdown_event"):
+            self._init_state()
         self._shutdown_event.set()
+        await self._cleanup()
+        raise StopConsumer()
+
+    async def _send_response(self, status: int, body: bytes, *, headers: list[tuple[bytes, bytes]]):
+        await self.send({
+            "type": "http.response.start",
+            "status": status,
+            "headers": headers,
+        })
+        await self.send({
+            "type": "http.response.body",
+            "body": body,
+            "more_body": False,
+        })
 
     async def _cleanup(self):
         async with self._cleanup_lock:
@@ -180,7 +212,11 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
         payload = encode_sse(event_name, data, event_id=event_id)
         try:
             async with self._send_lock:
-                await self.send_body(payload, more_body=True)
+                await self.send({
+                    "type": "http.response.body",
+                    "body": payload,
+                    "more_body": True,
+                })
         except asyncio.CancelledError:
             self._shutdown_event.set()
             raise

@@ -1453,7 +1453,24 @@ def _extract_jpeg_from_multipart(buffer: bytes) -> bytes | None:
     end = buffer.find(b"\xff\xd9", start + 2)
     if end == -1:
         return None
-    return buffer[start:end + 2]
+    return bytes(buffer[start:end + 2])
+
+
+def _direct_http_preview_kind(camera: Camera) -> str:
+    """Return direct HTTP preview type for snapshot/MJPEG camera URLs."""
+    source_url = str(camera.rtsp_url or "").strip()
+    if not source_url.lower().startswith(("http://", "https://")):
+        return ""
+
+    url_kind = classify_camera_source(source_url)
+    if url_kind in {"mjpeg", "snapshot"}:
+        return url_kind
+
+    stored_kind = str(camera.source_kind or "").lower()
+    if stored_kind in {"mjpeg", "snapshot"}:
+        return stored_kind
+
+    return ""
 
 
 def _fetch_direct_http_snapshot(
@@ -1472,7 +1489,10 @@ def _fetch_direct_http_snapshot(
     if not source_url:
         return None, "direct_http_missing_url"
 
-    source_kind = str(camera.source_kind or classify_camera_source(source_url)).lower()
+    source_kind = _direct_http_preview_kind(camera)
+    if not source_kind:
+        source_kind = str(camera.source_kind or classify_camera_source(source_url)).lower()
+
     try:
         if source_kind == "snapshot":
             resp = http_client.get(source_url, timeout=timeout_s)
@@ -1624,6 +1644,24 @@ def streams_snapshot(request, camera_id):
 
     jpeg = None
     frame_ts = None
+    direct_http_attempted = False
+    direct_http_error = ""
+    if _direct_http_preview_kind(camera):
+        direct_http_attempted = True
+        direct_http_jpeg, direct_http_error = _fetch_direct_http_snapshot(
+            camera,
+            timeout_s=float(cfg["ai_snapshot_timeout_s"]),
+        )
+        if direct_http_jpeg:
+            resp = HttpResponse(direct_http_jpeg, content_type="image/jpeg")
+            resp["Cache-Control"] = "no-store"
+            resp["X-Frame-Timestamp"] = ""
+            resp["X-Stream-Status"] = "connected"
+            resp["X-Preview-Source"] = "backend_http_direct"
+            return resp
+        if direct_http_error:
+            last_error = direct_http_error
+
     if _should_allow_preview_worker(camera, cfg):
         worker = STREAM_WORKERS.ensure_running(
             camera,
@@ -1644,19 +1682,20 @@ def streams_snapshot(request, camera_id):
             resp["X-Preview-Source"] = "backend_rtsp_worker"
             return resp
 
-    direct_http_jpeg, direct_http_error = _fetch_direct_http_snapshot(
-        camera,
-        timeout_s=float(cfg["ai_snapshot_timeout_s"]),
-    )
-    if direct_http_jpeg:
-        resp = HttpResponse(direct_http_jpeg, content_type="image/jpeg")
-        resp["Cache-Control"] = "no-store"
-        resp["X-Frame-Timestamp"] = ""
-        resp["X-Stream-Status"] = "connected"
-        resp["X-Preview-Source"] = "backend_http_fallback"
-        return resp
-    if direct_http_error:
-        last_error = direct_http_error
+    if not direct_http_attempted:
+        direct_http_jpeg, direct_http_error = _fetch_direct_http_snapshot(
+            camera,
+            timeout_s=float(cfg["ai_snapshot_timeout_s"]),
+        )
+        if direct_http_jpeg:
+            resp = HttpResponse(direct_http_jpeg, content_type="image/jpeg")
+            resp["Cache-Control"] = "no-store"
+            resp["X-Frame-Timestamp"] = ""
+            resp["X-Stream-Status"] = "connected"
+            resp["X-Preview-Source"] = "backend_http_fallback"
+            return resp
+        if direct_http_error:
+            last_error = direct_http_error
 
     return Response(
         {

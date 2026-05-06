@@ -1,4 +1,7 @@
 logLevel: info
+readTimeout: 60s
+writeTimeout: 30s
+writeQueueSize: 2048
 
 rtsp: yes
 rtspAddress: :8554

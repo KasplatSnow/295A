@@ -205,6 +205,7 @@ class StreamWorkerManager:
         from api.models import AIRuntimeRegistration, MediaMTXDesiredPath, MediaMTXObservedPathState
         from api.services.mediamtx_helpers import (
             _is_publisher_source_type,
+            classify_camera_source,
             get_mediamtx_loopback_url,
             is_self_referential,
             sanitize_stream_url,
@@ -217,6 +218,14 @@ class StreamWorkerManager:
             return get_mediamtx_loopback_url(stream_path) if stream_path else (direct_source or "0")
 
         direct_source_safe = bool(direct_source) and not is_self_referential(direct_source)
+        direct_kind = classify_camera_source(direct_source) if direct_source else ""
+        stored_kind = str(getattr(camera, "source_kind", "") or "").lower()
+        direct_http_kind = direct_kind in {"mjpeg", "snapshot"} or (
+            stored_kind in {"mjpeg", "snapshot"}
+            and direct_source.lower().startswith(("http://", "https://"))
+        )
+        if direct_source_safe and direct_http_kind:
+            return direct_source
 
         runtime_registration = getattr(camera, "runtime_registration", None)
         if runtime_registration is None:

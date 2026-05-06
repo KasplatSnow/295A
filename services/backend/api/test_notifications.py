@@ -22,6 +22,8 @@ from datetime import timedelta
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch, MagicMock, AsyncMock
 
+from channels.exceptions import StopConsumer
+
 from api.models import (
     Tenant, Membership, Camera, Incident, Alert, 
 )
@@ -748,7 +750,7 @@ class NotificationSSEConsumerTests(IsolatedAsyncioTestCase):
         self.consumer.group_name = "tenant_notifications_1"
         self.consumer.channel_name = "test-channel"
         self.consumer.channel_layer = SimpleNamespace(group_discard=AsyncMock())
-        self.consumer.send_body = AsyncMock()
+        self.consumer.send = AsyncMock()
         self.consumer._shutdown_event = asyncio.Event()
         self.consumer._send_lock = asyncio.Lock()
         self.consumer._cleanup_lock = asyncio.Lock()
@@ -757,12 +759,21 @@ class NotificationSSEConsumerTests(IsolatedAsyncioTestCase):
 
     async def test_send_event_sets_shutdown_event_when_socket_send_fails(self):
         """A broken socket should mark the stream for shutdown immediately."""
-        self.consumer.send_body.side_effect = RuntimeError("socket closed")
+        self.consumer.send.side_effect = RuntimeError("socket closed")
 
         with self.assertRaises(RuntimeError):
             await self.consumer._send_event("ping", {"ok": True})
 
         self.assertTrue(self.consumer._shutdown_event.is_set())
+
+    async def test_send_event_uses_streaming_http_body_event(self):
+        """SSE pushes should keep the HTTP response open for later events."""
+        await self.consumer._send_event("ping", {"ok": True})
+
+        message = self.consumer.send.await_args.args[0]
+        self.assertEqual(message["type"], "http.response.body")
+        self.assertTrue(message["more_body"])
+        self.assertIn(b"event: ping", message["body"])
 
     async def test_cleanup_is_idempotent_and_discards_group_once(self):
         """Cleanup should cancel heartbeat work and only discard the group once."""
@@ -781,3 +792,13 @@ class NotificationSSEConsumerTests(IsolatedAsyncioTestCase):
             "test-channel",
         )
         self.assertIsNone(self.consumer.heartbeat_task)
+
+    async def test_http_disconnect_cleans_up_and_stops_consumer(self):
+        """A browser refresh should discard the group immediately, not wait for heartbeat."""
+        with self.assertRaises(StopConsumer):
+            await self.consumer.http_disconnect({})
+
+        self.consumer.channel_layer.group_discard.assert_awaited_once_with(
+            "tenant_notifications_1",
+            "test-channel",
+        )

@@ -20,7 +20,7 @@ from server.runtime_services import (
 
 # Bump this when the payload renderer changes (e.g. FFmpeg flags)
 # to force a one-time controlled re-apply across all paths.
-MEDIAMTX_PAYLOAD_RENDERER_VERSION = 5
+MEDIAMTX_PAYLOAD_RENDERER_VERSION = 6
 
 
 def sanitize_stream_url(url: str) -> str:
@@ -267,7 +267,7 @@ def build_mediamtx_path_payload(
                 f'-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '
                 f'-i "{input_url}" '
                 f'-an -vf "scale=640:-2" '
-                f'-c:v libx264 -preset superfast -r 5 -b:v 300k '
+                f'-c:v libx264 -preset superfast -tune zerolatency -r 5 -g 10 -b:v 300k '
                 f'-pix_fmt yuv420p '
                 f'-f rtsp -rtsp_transport tcp {rtsp_target_base}/{path_name}'
             )
@@ -281,7 +281,7 @@ def build_mediamtx_path_payload(
                 payload["runOnDemand"] = command
                 payload["runOnDemandRestart"] = True
                 payload["runOnDemandStartTimeout"] = "30s"
-                payload["runOnDemandCloseAfter"] = "10s"
+                payload["runOnDemandCloseAfter"] = "30s"
                 # Explicitly clear persistent so PATCH removes stale state
                 payload["runOnInit"] = ""
                 payload["runOnInitRestart"] = False
@@ -319,7 +319,7 @@ def build_mediamtx_path_payload(
             f'-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '
             f'-i "{input_url}" '
             f'-an -vf "scale=640:-2" '
-            f'-c:v libx264 -preset superfast -r 5 -b:v 300k '
+            f'-c:v libx264 -preset superfast -tune zerolatency -r 5 -g 10 -b:v 300k '
             f'-pix_fmt yuv420p '
             f'-f rtsp -rtsp_transport tcp {rtsp_target_base}/{path_name}'
         )
@@ -338,7 +338,7 @@ def build_mediamtx_path_payload(
             payload["runOnDemand"] = command
             payload["runOnDemandRestart"] = True
             payload["runOnDemandStartTimeout"] = "30s"
-            payload["runOnDemandCloseAfter"] = "10s"
+            payload["runOnDemandCloseAfter"] = "30s"
             # Explicitly clear persistent so PATCH removes stale state
             payload["runOnInit"] = ""
             payload["runOnInitRestart"] = False
