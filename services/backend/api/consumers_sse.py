@@ -34,6 +34,9 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
         self.tenant_id: Optional[int] = None
         self.group_name: Optional[str] = None
         self.heartbeat_task: Optional[asyncio.Task] = None
+        self._disconnect_event = asyncio.Event()
+        self._cleanup_lock = asyncio.Lock()
+        self._cleanup_complete = False
 
         # Handle CORS preflight (OPTIONS request)
         method = self.scope.get("method", "").upper()
@@ -121,20 +124,32 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
             # 7. Start heartbeat task to keep proxy connections alive
             self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-            # Keep connection open indefinitely
-            while True:
-                await asyncio.sleep(3600)
+            # Keep the stream alive until ASGI signals a client disconnect.
+            await self._disconnect_event.wait()
         except asyncio.CancelledError:
             logger.debug(f"SSE connection for user {self.user.username} cancelled by server.")
             raise
         finally:
-            # ── Cleanup ───────────────────────────────────────────
+            await self._cleanup()
+
+    async def disconnect(self):
+        """Handle a client-initiated disconnect without waiting for Daphne to kill the task."""
+        self._disconnect_event.set()
+        await self._cleanup()
+
+    async def _cleanup(self):
+        async with self._cleanup_lock:
+            if self._cleanup_complete:
+                return
+            self._cleanup_complete = True
+
             if self.heartbeat_task:
                 self.heartbeat_task.cancel()
                 try:
                     await self.heartbeat_task
                 except asyncio.CancelledError:
                     pass
+                self.heartbeat_task = None
 
             if self.group_name:
                 try:
@@ -144,8 +159,13 @@ class NotificationSSEConsumer(AsyncHttpConsumer):
                     )
                 except Exception as e:
                     logger.error(f"Error discarding group during SSE cleanup: {e}")
+                finally:
+                    self.group_name = None
 
-            logger.info(f"User {self.user.username if getattr(self, 'user', None) else 'unknown'} disconnected from tenant {self.tenant_id} SSE notifications")
+            logger.info(
+                f"User {self.user.username if getattr(self, 'user', None) else 'unknown'} "
+                f"disconnected from tenant {self.tenant_id} SSE notifications"
+            )
 
     async def _heartbeat_loop(self):
         """Send a lightweight event periodically to prevent proxy timeouts."""
