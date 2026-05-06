@@ -62,6 +62,7 @@ from .services.ai_runtime_control_service import (
     start_ai_runtime,
     stop_ai_runtime,
 )
+from .services.audit_display import present_audit_log
 
 
 tenant_config_service = TenantConfigService()
@@ -723,7 +724,7 @@ class AlertViewSet(TenantScopedViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
 class AuditLogViewSet(TenantScopedViewSet):
-    queryset = AuditLog.objects.all()
+    queryset = AuditLog.objects.select_related("actor").all()
     serializer_class = AuditLogSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -825,12 +826,24 @@ def dashboard_summary(request):
     type_breakdown = list(incidents.values("type").annotate(count=Count("id")).order_by("-count"))
 
     # Recent audit
-    recent_audit = list(
-        AuditLog.objects.filter(tenant=tenant)
-        .select_related("actor")
-        .order_by("-created_at")[:10]
-        .values("id", "action", "target_type", "target_id", "created_at", "actor__username")
-    )
+    recent_audit = []
+    for log in AuditLog.objects.filter(tenant=tenant).select_related("actor").order_by("-created_at")[:10]:
+        recent_audit.append(
+            {
+                "id": log.id,
+                "action": log.action,
+                "target_type": log.target_type,
+                "target_id": log.target_id,
+                "created_at": log.created_at,
+                "actor": log.actor.username if log.actor else None,
+                **present_audit_log(
+                    action=log.action,
+                    target_type=log.target_type,
+                    target_id=log.target_id,
+                    meta=log.meta,
+                ),
+            }
+        )
 
     # AI health check (cached to avoid blocking dashboard polling)
     ai_healthy = cache.get("dashboard_ai_health")
@@ -867,9 +880,7 @@ def dashboard_summary(request):
         "stats": stats,
         "recent_incidents": recent_incidents,
         "type_breakdown": type_breakdown,
-        "recent_audit": [
-            {**a, "actor": a.pop("actor__username", None)} for a in recent_audit
-        ],
+        "recent_audit": recent_audit,
         "ai_healthy": ai_healthy,
         "streams_health": streams_health,
         "entities": recent_entities,
@@ -1718,10 +1729,16 @@ def community_activity(request):
 
     for log in AuditLog.objects.filter(tenant=tenant).select_related("actor").order_by("-created_at")[:limit]:
         actor_name = log.actor.username if log.actor else "System"
+        display = present_audit_log(
+            action=log.action,
+            target_type=log.target_type,
+            target_id=log.target_id,
+            meta=log.meta,
+        )
         events.append({
-            "type": "audit",
-            "title": log.action.replace(".", " ").replace("_", " ").title(),
-            "description": log.meta.get("message") if isinstance(log.meta, dict) else "",
+            "type": display["display_type"],
+            "title": display["display_title"],
+            "description": display["display_description"],
             "timestamp": log.created_at,
             "actor": actor_name,
             "related_type": log.target_type,
@@ -2592,6 +2609,9 @@ _DJANGO_START = timezone.now()
 def debug_system(request):
     """GET /api/debug/system/ — aggregated system diagnostics with AI fallbacks."""
     import requests as http_client
+
+    tenant = get_active_tenant(request)
+    assert_role_in(request, tenant, allowed_roles={"owner", "admin"})
 
     # Try multiple AI base URLs in order
     from api.services.mediamtx_helpers import get_ai_base_url

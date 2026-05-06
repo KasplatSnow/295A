@@ -13,6 +13,7 @@ import LoadingDisplay from "@/components/LoadingDisplay";
 import AuthOnlyRoute from "./components/routing/AuthOnlyRoute";
 import TenantOnlyRoute from "./components/routing/TenantOnlyRoute";
 import PublicOnlyRoute from "./components/routing/PublicOnlyRoute";
+import AdminOnlyRoute from "./components/routing/AdminOnlyRoute";
 
 // Lazy-loaded pages
 const NotFound = React.lazy(() => import("@/pages/not-found"));
@@ -107,9 +108,9 @@ function AppShellRoutes() {
         </TenantOnlyRoute>
       </Route>
       <Route path="/debug">
-        <TenantOnlyRoute>
+        <AdminOnlyRoute>
           <Debug />
-        </TenantOnlyRoute>
+        </AdminOnlyRoute>
       </Route>
       <Route component={NotFound} />
     </Switch>

@@ -95,7 +95,8 @@ export default function Community() {
       const { data } = await api.get("/audit/");
       return (Array.isArray(data) ? data : data?.results ?? []) as Array<{
         id: number | string; action: string; target_type: string;
-        target_id: string; created_at: string; actor?: number;
+        target_id: string; created_at: string; actor?: number; actor_username?: string;
+        display_title?: string; display_description?: string; display_type?: string;
       }>;
     },
     retry: false,
@@ -104,7 +105,10 @@ export default function Community() {
   const auditLogs = (auditQ.data ?? []).map((a) => ({
     id: String(a.id),
     time: new Date(a.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    action: `${a.action.replace(/\./g, " ")} — ${a.target_type} #${a.target_id}`,
+    action: a.display_title ?? a.action.replace(/\./g, " "),
+    description: a.display_description ?? `${a.target_type} #${a.target_id}`,
+    type: a.display_type ?? "activity",
+    actor: a.actor_username ?? "System",
   }));
 
   const { toast } = useToast();
@@ -447,8 +451,9 @@ export default function Community() {
                   <div className="flex-1">
                     <p className="text-sm">{log.action}</p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      {log.time}
+                      {log.actor} · {log.type} · {log.time}
                     </p>
+                    <p className="text-xs text-muted-foreground mt-1">{log.description}</p>
                   </div>
                 </div>
               ))}

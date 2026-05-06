@@ -34,6 +34,7 @@ export default function NavBar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { user, role, tenantId } = useAuth();
   const canTestNotifications = role === "owner" || role === "admin";
+  const canAccessDebug = role === "owner" || role === "admin";
   
   const tenantIdNum = tenantId ? parseInt(String(tenantId), 10) : null;
   
@@ -70,7 +71,7 @@ export default function NavBar() {
     { path: "/live-ai", label: "Live AI", icon: Brain },
     { path: "/reports", label: "Reports", icon: FileText },
     { path: "/settings", label: "Settings", icon: SettingsIcon },
-    { path: "/debug", label: "Debug", icon: Bug },
+    ...(canAccessDebug ? [{ path: "/debug", label: "Debug", icon: Bug }] : []),
   ];
 
   return (

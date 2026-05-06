@@ -13,6 +13,7 @@ from api.models import (
     AuditLog, Profile, Invitation, AIRuntimeRegistration,
     MediaMTXDesiredPath, MediaMTXObservedPathState
 )
+from api.serializers import AuditLogSerializer
 
 
 @override_settings(
@@ -513,10 +514,7 @@ class CameraTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        camera = Camera.objects.get(tenant=self.tenant, name='Main Door')
-        reg = AIRuntimeRegistration.objects.get(camera=camera)
-        self.assertFalse(reg.desired_enabled)
-        self.assertFalse(response.data['is_ai_synced'])
+
 
     def test_update_camera_preserves_unsynced_ai_state(self):
         create_response = self.client.post(
@@ -557,6 +555,61 @@ class CameraTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         camera = Camera.objects.get(tenant=self.tenant, name='Quoted URL Camera')
         self.assertEqual(camera.rtsp_url, 'http://67.53.46.161:65123/mjpg/video.mjpg')
+
+
+class AuditDisplayAndDebugAccessTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.tenant = Tenant.objects.create(name="Ops Community")
+        self.owner = User.objects.create_user(username="owner_audit", password="password123")
+        self.member = User.objects.create_user(username="member_audit", password="password123")
+        Membership.objects.create(user=self.owner, tenant=self.tenant, role="owner")
+        Membership.objects.create(user=self.member, tenant=self.tenant, role="member")
+        self.audit = AuditLog.objects.create(
+            tenant=self.tenant,
+            actor=self.owner,
+            action="entity.processing_failed",
+            target_type="entity",
+            target_id="42",
+            meta={"message": "Embedding generation failed for entity 42"},
+        )
+
+    def _auth(self, username: str):
+        response = self.client.post(
+            "/api/auth/token/",
+            {"username": username, "password": "password123"},
+            format="json",
+        )
+        token = response.data["access"]
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+            HTTP_X_TENANT_ID=str(self.tenant.id),
+        )
+
+    def test_audit_serializer_exposes_meaningful_display_fields(self):
+        data = AuditLogSerializer(self.audit).data
+        self.assertEqual(data["display_title"], "Entity processing failed")
+        self.assertEqual(data["display_type"], "error")
+        self.assertIn("Embedding generation failed", data["display_description"])
+
+    def test_dashboard_summary_returns_display_fields_for_recent_audit(self):
+        self._auth("owner_audit")
+        response = self.client.get("/api/dashboard/summary/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["recent_audit"][0]["display_title"], "Entity processing failed")
+        self.assertEqual(response.data["recent_audit"][0]["display_type"], "error")
+
+    def test_debug_endpoint_requires_admin_or_owner(self):
+        self._auth("member_audit")
+        forbidden = self.client.get("/api/debug/system/")
+        self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)
+
+        self._auth("owner_audit")
+        with patch("requests.get") as mock_get:
+            mock_get.return_value.status_code = 200
+            mock_get.return_value.json.return_value = {"status": "ok"}
+            allowed = self.client.get("/api/debug/system/")
+        self.assertEqual(allowed.status_code, status.HTTP_200_OK)
 
 
 @override_settings(

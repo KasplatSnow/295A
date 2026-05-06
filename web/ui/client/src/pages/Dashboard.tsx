@@ -76,7 +76,7 @@ export default function Dashboard() {
         stats: { today: number; week: number; month: number; open?: number; critical?: number; camera_total?: number; camera_live?: number };
         recent_incidents: Array<any>;
         type_breakdown: Array<{ type: string; count: number }>;
-        recent_audit: Array<{ id: number; action: string; actor: string; created_at: string }>;
+        recent_audit: Array<{ id: number; action: string; actor: string; created_at: string; display_title?: string; display_description?: string; display_type?: string }>;
         ai_healthy?: boolean;
         entities?: Array<{ id: string; name: string; category: string; group: string }>;
         streams_health?: Record<string, any>;
@@ -136,10 +136,10 @@ export default function Dashboard() {
 
   const communityActivity = (data?.recent_audit ?? []).slice(0, 10).map((activity: any) => ({
     time: activity.created_at ? new Date(activity.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "",
-    title: String(activity.action ?? "Activity"),
-    description: "",
+    title: String(activity.display_title ?? activity.action ?? "Activity"),
+    description: String(activity.display_description ?? ""),
     actor: activity.actor ? String(activity.actor) : "System",
-    type: "activity",
+    type: String(activity.display_type ?? "activity"),
   }));
 
   const getEntityIcon = (type: string) => {

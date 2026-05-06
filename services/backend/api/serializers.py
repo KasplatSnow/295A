@@ -7,6 +7,7 @@ from .models import (
 )
 from django.contrib.auth.models import User
 from api.services.mediamtx_helpers import sanitize_stream_url
+from api.services.audit_display import present_audit_log
 
 class TenantSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
@@ -204,9 +205,38 @@ class AlertSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 class AuditLogSerializer(serializers.ModelSerializer):
+    actor_username = serializers.CharField(source="actor.username", read_only=True)
+    display_title = serializers.SerializerMethodField()
+    display_type = serializers.SerializerMethodField()
+    display_description = serializers.SerializerMethodField()
+
     class Meta:
         model = AuditLog
         fields = "__all__"
+
+    def get_display_title(self, obj):
+        return present_audit_log(
+            action=obj.action,
+            target_type=obj.target_type,
+            target_id=obj.target_id,
+            meta=obj.meta,
+        )["display_title"]
+
+    def get_display_type(self, obj):
+        return present_audit_log(
+            action=obj.action,
+            target_type=obj.target_type,
+            target_id=obj.target_id,
+            meta=obj.meta,
+        )["display_type"]
+
+    def get_display_description(self, obj):
+        return present_audit_log(
+            action=obj.action,
+            target_type=obj.target_type,
+            target_id=obj.target_id,
+            meta=obj.meta,
+        )["display_description"]
 
 class ProfileSerializer(serializers.ModelSerializer):
     user = serializers.StringRelatedField(read_only=True)
