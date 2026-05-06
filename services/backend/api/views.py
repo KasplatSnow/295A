@@ -1441,6 +1441,68 @@ def _fetch_ai_snapshot(
     return None, None, "", last_error
 
 
+def _extract_jpeg_from_multipart(buffer: bytes) -> bytes | None:
+    start = buffer.find(b"\xff\xd8")
+    if start == -1:
+        return None
+    end = buffer.find(b"\xff\xd9", start + 2)
+    if end == -1:
+        return None
+    return buffer[start:end + 2]
+
+
+def _fetch_direct_http_snapshot(
+    camera: Camera,
+    *,
+    timeout_s: float,
+) -> tuple[bytes | None, str]:
+    """Best-effort direct fetch for HTTP snapshot/MJPEG sources.
+
+    This covers public MJPEG endpoints that don't play nicely with the RTSP/OpenCV
+    preview worker path. Returns ``(jpeg_bytes, error_message)``.
+    """
+    import requests as http_client
+
+    source_url = str(camera.rtsp_url or "").strip()
+    if not source_url:
+        return None, "direct_http_missing_url"
+
+    source_kind = str(camera.source_kind or classify_camera_source(source_url)).lower()
+    try:
+        if source_kind == "snapshot":
+            resp = http_client.get(source_url, timeout=timeout_s)
+            content_type = str(resp.headers.get("Content-Type", ""))
+            if resp.status_code == 200 and "image" in content_type and resp.content:
+                return resp.content, ""
+            return None, f"direct_snapshot_http_{resp.status_code}"
+
+        if source_kind == "mjpeg":
+            with http_client.get(source_url, stream=True, timeout=(3.0, timeout_s)) as resp:
+                content_type = str(resp.headers.get("Content-Type", "")).lower()
+                if resp.status_code != 200:
+                    return None, f"direct_mjpeg_http_{resp.status_code}"
+                if "multipart" not in content_type and "mjpeg" not in content_type and "jpeg" not in content_type:
+                    return None, "direct_mjpeg_unexpected_content_type"
+
+                buffer = bytearray()
+                for chunk in resp.iter_content(chunk_size=4096):
+                    if not chunk:
+                        continue
+                    buffer.extend(chunk)
+                    jpeg = _extract_jpeg_from_multipart(buffer)
+                    if jpeg:
+                        return jpeg, ""
+                    if len(buffer) > 2_000_000:
+                        return None, "direct_mjpeg_frame_not_found"
+                return None, "direct_mjpeg_stream_ended"
+    except http_client.Timeout:
+        return None, f"direct_http_timeout:{source_kind}"
+    except http_client.RequestException as exc:
+        return None, f"direct_http_error:{type(exc).__name__}"
+
+    return None, f"direct_http_unsupported:{source_kind}"
+
+
 def _build_stream_token(camera_id: int, ttl_s: int = 60) -> tuple[str, int]:
     exp = int(time.time()) + ttl_s
     payload = f"{camera_id}.{exp}".encode()
@@ -1576,6 +1638,20 @@ def streams_snapshot(request, camera_id):
             resp["X-Stream-Status"] = "connected"
             resp["X-Preview-Source"] = "backend_rtsp_worker"
             return resp
+
+    direct_http_jpeg, direct_http_error = _fetch_direct_http_snapshot(
+        camera,
+        timeout_s=float(cfg["ai_snapshot_timeout_s"]),
+    )
+    if direct_http_jpeg:
+        resp = HttpResponse(direct_http_jpeg, content_type="image/jpeg")
+        resp["Cache-Control"] = "no-store"
+        resp["X-Frame-Timestamp"] = ""
+        resp["X-Stream-Status"] = "connected"
+        resp["X-Preview-Source"] = "backend_http_fallback"
+        return resp
+    if direct_http_error:
+        last_error = direct_http_error
 
     return Response(
         {

@@ -775,6 +775,31 @@ class StreamEndpointTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
         self.assertEqual(response.data['status'], 'warming_up')
 
+    @patch('api.views.STREAM_WORKERS.get_latest_jpeg', return_value=(None, None, 'warming'))
+    @patch('api.views.STREAM_WORKERS.ensure_running')
+    @patch('requests.get')
+    def test_snapshot_falls_back_to_direct_http_mjpeg_frame(self, mock_get, _mock_ensure, _mock_latest):
+        self.camera.rtsp_url = 'http://195.196.36.242/mjpg/video.mjpg'
+        self.camera.source_kind = 'mjpeg'
+        self.camera.save(update_fields=['rtsp_url', 'source_kind'])
+
+        stream_resp = MagicMock()
+        stream_resp.__enter__.return_value = stream_resp
+        stream_resp.__exit__.return_value = None
+        stream_resp.status_code = 200
+        stream_resp.headers = {'Content-Type': 'multipart/x-mixed-replace; boundary=frame'}
+        stream_resp.iter_content.return_value = iter([
+            b'--frame\r\nContent-Type: image/jpeg\r\n\r\n',
+            b'\xff\xd8jpeg-bytes\xff\xd9\r\n',
+        ])
+        mock_get.return_value = stream_resp
+
+        response = self.client.get(f'/api/streams/{self.camera.id}/snapshot/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.content, b'\xff\xd8jpeg-bytes\xff\xd9')
+        self.assertEqual(response['X-Preview-Source'], 'backend_http_fallback')
+
     @override_settings(
         STREAM_PREVIEW_PREFER_AI_SNAPSHOTS=True,
         STREAM_PREVIEW_RTSP_FALLBACK_ENABLED=False,
