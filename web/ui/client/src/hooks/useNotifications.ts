@@ -400,20 +400,30 @@ export function useNotifications(): UseNotificationsReturn {
 
               if (event.event === 'notification' || event.event === 'broadcast' || data.type === 'NEW_NOTIFICATION') {
                 const payloadData = (data.data || {}) as Record<string, unknown>;
+                const alertId = normalizeId(data.alert_id ?? data.id);
+                const eventId = normalizeId(event.id);
+                const incidentId = (data.incident_id ?? payloadData.incident_id) as string | number | undefined;
+                const notificationId = alertId
+                  ? `alert-${alertId}`
+                  : eventId
+                    ? `sse-${eventId}`
+                    : incidentId
+                      ? `incident-${String(incidentId)}-${String(data.created_at ?? '')}`
+                      : `sse-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
                 
                 const notification: Notification = {
-                  id: event.id || data.alert_id ? `alert-${String(data.alert_id)}` : `sse-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+                  id: notificationId,
                   ...data,
-                  incident_id: (data.incident_id ?? payloadData.incident_id) as string | number | undefined,
+                  incident_id: incidentId,
                   severity: (data.severity ?? payloadData.severity) as number | undefined,
                   severity_level: (data.severity_level ?? payloadData.severity_level) as string | undefined,
                   camera_name: (data.camera_name ?? payloadData.camera_name) as string | undefined,
                   is_read: false,
                 };
 
-                const alertId = normalizeId(data.alert_id ?? data.id);
-                if (alertId && !processedAlertIds.current.has(alertId)) {
-                  processedAlertIds.current.add(alertId);
+                const dedupeId = alertId ?? notificationId;
+                if (!processedAlertIds.current.has(dedupeId)) {
+                  processedAlertIds.current.add(dedupeId);
                   
                   if (typeof data.unread_count === 'number') {
                     setUnreadCount(data.unread_count);

@@ -251,6 +251,7 @@ def build_ai_registration_payload(
         "ingest_backend": str(ingest_backend or "opencv"),
         "enabled_lanes": lanes,
         "sample_hz": float(sample_hz),
+        "audio_enabled": bool(camera.audio_enabled),
         "tenant_id": str(camera.tenant.id) if camera.tenant else None,
         "community_id": str(camera.tenant.id) if camera.tenant else None,
         "policy_version": int(policy_version),

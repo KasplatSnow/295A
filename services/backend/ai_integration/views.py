@@ -738,12 +738,16 @@ def ai_internal_cameras_snapshot(request):
         desired_path = getattr(camera, "mediamtx_desired_path", None)
 
         camera_id = camera.ai_camera_id or camera.stream_path or f"camera_{camera.id}"
+        is_direct_live_webcam = (
+            camera.source_type == Camera.SourceType.WEBCAM
+            and (camera.ai_camera_id == "cam_live" or camera.stream_path == "cam_live")
+        )
         enabled = bool(runtime.desired_enabled) if runtime is not None else camera.status == Camera.Status.ACTIVE
         ingest_backend = (
             runtime.desired_ingest_backend
             if runtime is not None and runtime.desired_ingest_backend
             else "live_camera"
-            if camera.source_type == Camera.SourceType.WEBCAM
+            if is_direct_live_webcam
             else "opencv"
         )
         sample_hz = (
@@ -764,9 +768,7 @@ def ai_internal_cameras_snapshot(request):
                 "camera_id": camera_id,
                 "camera_name": camera.name,
                 "stream_path": camera.stream_path or camera_id,
-                "source_type": "live_camera"
-                if camera.source_type == Camera.SourceType.WEBCAM
-                else "rtsp",
+                "source_type": "live_camera" if is_direct_live_webcam else "rtsp",
                 "rtsp_url": rtsp_url,
                 "enabled": enabled,
                 "ingest_backend": ingest_backend,

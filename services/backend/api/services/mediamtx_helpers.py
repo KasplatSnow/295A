@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from urllib.parse import urlparse, urlunparse
-from api.models import Camera
+# from api.models import Camera  # moved to function-local scope to avoid circularity
 from server.runtime_services import (
     get_ai_base_url as resolve_ai_base_url,
     get_mediamtx_api_base as resolve_mediamtx_api_base,
@@ -67,8 +67,9 @@ def hash_mediamtx_payload(payload: dict) -> str:
     return hashlib.sha256(canon.encode()).hexdigest()[:16]
 
 
-def get_canonical_camera_id(camera: Camera) -> str:
+def get_canonical_camera_id(camera) -> str:
     """Return a stable ID for MediaMTX paths and AI registration."""
+    from api.models import Camera
     from django.utils.text import slugify
 
     if camera.stream_path:
@@ -208,7 +209,8 @@ def classify_camera_source(url: str) -> str:
     return "unknown"
 
 
-def _is_publisher_source_type(camera: Camera) -> bool:
+def _is_publisher_source_type(camera) -> bool:
+    from api.models import Camera
     """Return True if the camera's source_type means MediaMTX should
     WAIT for a publisher rather than actively pulling a stream.
 
@@ -232,7 +234,7 @@ def _is_publisher_source_type(camera: Camera) -> bool:
 
 
 def build_mediamtx_path_payload(
-    camera: Camera,
+    camera,
     path_name: str,
     source_kind: str,
     persistent: bool = False,

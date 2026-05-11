@@ -175,7 +175,7 @@ models:
   # Auto-download: doctor.py fetches source files + checkpoint on first startup
   #                when enabled=true (see AI_BEATS_HF_REPO_ID env var to override).
   audio_anomaly:
-    enabled: false                  # set true to activate; doctor.py will auto-fetch assets
+    enabled: true                  # set true to activate; doctor.py will auto-fetch assets
     backend: beats
     device: auto                    # auto | cuda | cpu
     fp16: true                      # FP16 on CUDA only (safe fallback to FP32)
@@ -208,7 +208,7 @@ models:
   # Deterministic rule-based fusion of audio and video Observations.
   # Added here for completeness; implemented in PR-04.
   video_audio_fusion:
-    enabled: false                  # activated in PR-04
+    enabled: true                  # activated in PR-04
     window_s: 10.0                  # temporal window to correlate audio + video events
     audio_weight: 0.45
     video_weight: 0.55

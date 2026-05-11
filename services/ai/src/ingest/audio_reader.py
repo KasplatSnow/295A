@@ -98,9 +98,11 @@ class FFmpegAudioReader:
         self._running = False
         self._healthy = False
         self._thread: Optional[threading.Thread] = None
+        self._proc: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
         self._latest: Optional[AudioChunk] = None
         self._new_chunk_event = threading.Event()
+        self._stop_event = threading.Event()
         self._seq = 0
         self._chunks_total = 0
         self._reconnect_count = 0
@@ -116,6 +118,7 @@ class FFmpegAudioReader:
         """Start background audio reader thread."""
         if self._running:
             return
+        self._stop_event.clear()
         self._running = True
         self._start_time = time.monotonic()
         self._thread = threading.Thread(
@@ -130,9 +133,23 @@ class FFmpegAudioReader:
     def stop(self) -> None:
         """Signal stop and wait for the thread to exit."""
         self._running = False
+        self._stop_event.set()
         self._new_chunk_event.set()     # unblock any waiting call
+        proc = self._proc
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=5.0)
+            self._thread.join(timeout=2.0)
+        proc = self._proc
+        if proc and proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        self._proc = None
         self._healthy = False
         self.logger.info(f"AudioReader stopped: camera={self.camera_id}")
 
@@ -205,6 +222,7 @@ class FFmpegAudioReader:
                     stderr=subprocess.DEVNULL,
                     bufsize=0,
                 )
+                self._proc = proc
                 self._healthy = True
                 backoff = self._RECONNECT_BASE_S
                 self._overlap_buf = np.empty(0, dtype=np.float32)
@@ -222,6 +240,8 @@ class FFmpegAudioReader:
                         proc.wait(timeout=3)
                     except Exception:
                         pass
+                if self._proc is proc:
+                    self._proc = None
 
             if not self._running:
                 break
@@ -231,7 +251,8 @@ class FFmpegAudioReader:
                 f"AudioReader reconnecting in {backoff:.1f}s "
                 f"(attempt #{self._reconnect_count})"
             )
-            time.sleep(backoff)
+            if self._stop_event.wait(backoff):
+                break
             backoff = min(backoff * self._RECONNECT_MULT, self._RECONNECT_MAX_S)
 
     def _process_pipe(self, proc: subprocess.Popen) -> None:
@@ -246,7 +267,7 @@ class FFmpegAudioReader:
         session_start_utc = _now_utc()
         samples_elapsed = 0   # total samples read this session
 
-        while self._running:
+        while self._running and not self._stop_event.is_set():
             raw = proc.stdout.read(hop_bytes)
             if not raw:
                 # EOF — FFmpeg exited

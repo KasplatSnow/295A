@@ -8,8 +8,9 @@ Downloads:
 
 Configuration priority for checkpoint:
   1. Env var  AI_BEATS_DOWNLOAD_URL    — direct HTTPS URL (overrides everything)
-  2. Env var  AI_BEATS_HF_REPO_ID     — HuggingFace repo (default: agkphysics/AudioSet-BEATs)
-  3. Config   models.audio_anomaly.hf_repo_id / hf_filename in models.yaml
+  2. Env var  AI_BEATS_MODEL_PATH      — destination path for the checkpoint
+  3. Env var  AI_BEATS_HF_REPO_ID      — HuggingFace repo (default: agkphysics/AudioSet-BEATs)
+  4. Config   models.audio_anomaly.hf_repo_id / hf_filename in models.yaml
 
 Usage (standalone):
     python scripts/download_beats.py
@@ -42,6 +43,12 @@ _AI_ROOT = _SCRIPT_DIR.parent
 _DEFAULT_BEATS_SRC_DIR = _AI_ROOT / "third_party" / "beats"
 _DEFAULT_BEATS_MODEL_DIR = _AI_ROOT / "models" / "audio" / "beats"
 _DEFAULT_CHECKPOINT_NAME = "BEATs_iter3_plus_AS2M_finetuned_cpt2.pt"
+_DEFAULT_CHECKPOINT_PATH = Path(
+    os.environ.get(
+        "AI_BEATS_MODEL_PATH",
+        str(_DEFAULT_BEATS_MODEL_DIR / _DEFAULT_CHECKPOINT_NAME),
+    )
+)
 
 # ── BEATs source file URLs (GitHub raw — stable, no auth, no expiry) ─────────
 _BEATS_BASE_URL = "https://raw.githubusercontent.com/microsoft/unilm/master/beats"
@@ -214,8 +221,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--dest",
-        default=str(_DEFAULT_BEATS_MODEL_DIR / _DEFAULT_CHECKPOINT_NAME),
-        help=f"Destination path for checkpoint (default: {_DEFAULT_BEATS_MODEL_DIR / _DEFAULT_CHECKPOINT_NAME})",
+        default=str(_DEFAULT_CHECKPOINT_PATH),
+        help=f"Destination path for checkpoint (default: {_DEFAULT_CHECKPOINT_PATH})",
     )
     parser.add_argument(
         "--beats-src",

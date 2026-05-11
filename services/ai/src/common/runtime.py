@@ -64,6 +64,11 @@ def get_backend_base_internal() -> str:
     return f"http://{host}:{port}"
 
 
+def get_mediamtx_rtsp_base_url() -> str:
+    """Return the base RTSP URL for MediaMTX (e.g. rtsp://localhost:8554)."""
+    return _env_text("MEDIAMTX_RTSP_BASE", default="rtsp://127.0.0.1:8554").rstrip("/")
+
+
 def get_backend_config_sync_base() -> str:
     configured = _env_text("BACKEND_CONFIG_SYNC_BASE")
     if configured:

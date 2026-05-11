@@ -24,6 +24,10 @@ scipy>=1.10.0
 # CLIP (pet embedder)
 open_clip_torch>=2.24.0
 
+# Face/entity identity embedder
+cython>=3.0.0
+insightface>=0.7.3
+
 # Model auto-download
 huggingface_hub>=0.20.0
 

@@ -8,6 +8,7 @@ import time
 from django.core.management.base import BaseCommand
 from api.services.worker_services import (
     EntityEmbeddingProcessor,
+    NotificationBackfillProcessor,
     OutboxStreamPublisherProcessor,
     RelayReconcilerProcessor,
     BaseWorkerService,
@@ -54,6 +55,7 @@ class Command(BaseCommand):
         processors = [
             EntityEmbeddingProcessor(limit=10),
             OutboxStreamPublisherProcessor(batch_size=100),
+            NotificationBackfillProcessor(),
         ]
         reconciler_processor = RelayReconcilerProcessor(shadow_mode=reconciler_shadow)
 

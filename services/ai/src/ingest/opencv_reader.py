@@ -36,6 +36,7 @@ class OpenCVReader(IngestBackend):
         self._frame_seq = 0              # monotonic frame counter
         self._prev_returned_seq = 0      # last seq returned by get_latest
         self._new_frame = threading.Event()  # signalled on new frame
+        self._stop_event = threading.Event()
 
     def _configure_capture(self, cap) -> None:
         if cap is None:
@@ -52,6 +53,7 @@ class OpenCVReader(IngestBackend):
         if self._running:
             return
         
+        self._stop_event.clear()
         self._running = True
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
@@ -60,10 +62,18 @@ class OpenCVReader(IngestBackend):
     def stop(self):
         """Stop the reader thread"""
         self._running = False
-        if self._thread:
-            self._thread.join(timeout=5.0)
-        if self._cap:
-            self._cap.release()
+        self._stop_event.set()
+        self._new_frame.set()
+        cap = self._cap
+        self._cap = None
+        if cap:
+            try:
+                cap.release()
+            except Exception:
+                pass
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        self._connected = False
         self.logger.info(f"Stopped OpenCV reader for {self.camera_id}")
     
     def get_latest(self) -> Tuple[Optional[np.ndarray], Optional[str]]:
@@ -94,6 +104,8 @@ class OpenCVReader(IngestBackend):
     def _connect(self) -> bool:
         """Establish connection to video source"""
         try:
+            if not self._running or self._stop_event.is_set():
+                return False
             if self._cap:
                 self._cap.release()
             
@@ -112,6 +124,11 @@ class OpenCVReader(IngestBackend):
                 # Test read
                 ret, frame = self._cap.read()
                 if ret and frame is not None:
+                    if not self._running or self._stop_event.is_set():
+                        self._cap.release()
+                        self._cap = None
+                        self._connected = False
+                        return False
                     self._connected = True
                     self.logger.info(f"Connected to {self.source}")
                     
@@ -145,18 +162,25 @@ class OpenCVReader(IngestBackend):
                 else:
                     wait_s = self._backoff_delay
                     self.logger.warning(f"Connection failed, retrying in {wait_s:.1f}s")
-                    time.sleep(wait_s)
+                    if self._stop_event.wait(wait_s):
+                        break
                     self._backoff_delay = min(self._backoff_delay * self._backoff_multiplier, self._backoff_max)
                     continue
             
             try:
-                ret, frame = self._cap.read()
+                cap = self._cap
+                if cap is None:
+                    self._connected = False
+                    continue
+
+                ret, frame = cap.read()
                 
                 if not ret or frame is None:
                     self.logger.warning(f"Failed to read frame, reconnecting...")
                     self._connected = False
                     wait_s = self._backoff_delay
-                    time.sleep(wait_s)
+                    if self._stop_event.wait(wait_s):
+                        break
                     self._backoff_delay = min(self._backoff_delay * self._backoff_multiplier, self._backoff_max)
                     continue
                 
@@ -172,11 +196,13 @@ class OpenCVReader(IngestBackend):
                 # Minimal yield — cap.read() itself blocks sufficiently for
                 # RTSP/file sources.  1 ms keeps CPU usage negligible while
                 # cutting per-frame idle latency vs the former 10 ms sleep.
-                time.sleep(0.001)
+                if self._stop_event.wait(0.001):
+                    break
                 
             except Exception as e:
                 self.logger.error(f"Read error: {e}")
                 self._connected = False
                 wait_s = self._backoff_delay
-                time.sleep(wait_s)
+                if self._stop_event.wait(wait_s):
+                    break
                 self._backoff_delay = min(self._backoff_delay * self._backoff_multiplier, self._backoff_max)

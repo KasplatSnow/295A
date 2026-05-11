@@ -19,13 +19,15 @@ PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
 INSTANCE_NAME="${INSTANCE_NAME:-vigilzone-monolith}"
 ZONE="${ZONE:-us-central1-a}"
 REGION="${REGION:-${ZONE%-*}}"
-MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-8}"
+MACHINE_TYPE="${MACHINE_TYPE:-n2-highmem-16}"
 BOOT_DISK_SIZE="${BOOT_DISK_SIZE:-50GB}"
 BOOT_DISK_TYPE="${BOOT_DISK_TYPE:-pd-ssd}"
 INSTANCE_TAG="${INSTANCE_TAG:-vigilzone-node}"
 APP_FIREWALL_RULE="${APP_FIREWALL_RULE:-vigilzone-app-ports}"
+RTSP_FIREWALL_RULE="${RTSP_FIREWALL_RULE:-vigilzone-rtsp-publish}"
 SSH_FIREWALL_RULE="${SSH_FIREWALL_RULE:-vigilzone-ssh}"
 SSH_SOURCE_RANGE="${SSH_SOURCE_RANGE:-0.0.0.0/0}"
+RTSP_SOURCE_RANGE="${RTSP_SOURCE_RANGE:-0.0.0.0/0}"
 APP_DIR_NAME="${APP_DIR_NAME:-vigilzone-monolith}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-vigilzone}"
 GIT_REPO_URL="${GIT_REPO_URL:-https://github.com/Dev228-afk/Vigilzone.git}"
@@ -167,7 +169,29 @@ if ! gcloud compute firewall-rules describe "$APP_FIREWALL_RULE" --project="$PRO
         --description="VigilZone app, HLS, and WebRTC ingress" \
         --target-tags="$INSTANCE_TAG"
 else
-    echo "App firewall rule already exists."
+    gcloud compute firewall-rules update "$APP_FIREWALL_RULE" \
+        --project="$PROJECT_ID" \
+        --allow tcp:8085,tcp:8888,tcp:8889,udp:8189 \
+        --description="VigilZone app, HLS, and WebRTC ingress" \
+        --target-tags="$INSTANCE_TAG" >/dev/null
+    echo "App firewall rule already exists; ensured allowed ports."
+fi
+
+if ! gcloud compute firewall-rules describe "$RTSP_FIREWALL_RULE" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud compute firewall-rules create "$RTSP_FIREWALL_RULE" \
+        --project="$PROJECT_ID" \
+        --allow tcp:8554 \
+        --description="VigilZone RTSP publisher ingress for external audio/video sources" \
+        --source-ranges="$RTSP_SOURCE_RANGE" \
+        --target-tags="$INSTANCE_TAG"
+else
+    gcloud compute firewall-rules update "$RTSP_FIREWALL_RULE" \
+        --project="$PROJECT_ID" \
+        --allow tcp:8554 \
+        --description="VigilZone RTSP publisher ingress for external audio/video sources" \
+        --source-ranges="$RTSP_SOURCE_RANGE" \
+        --target-tags="$INSTANCE_TAG" >/dev/null
+    echo "RTSP firewall rule already exists; ensured publisher ingress."
 fi
 
 if ! gcloud compute firewall-rules describe "$SSH_FIREWALL_RULE" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -304,6 +328,14 @@ AI_EVIDENCE_DIR=/app/evidence
 AI_DATA_DIR=/app/data
 AI_STAGING_DIR=/app/data/staging_uploads
 AI_ENROLL_IMAGE_DIR=/app/data/enroll_images
+HF_HOME=/app/data/hf_cache
+TORCH_HOME=/app/data/torch_cache
+XDG_CACHE_HOME=/app/data/cache
+INSIGHTFACE_HOME=/app/data/insightface
+AI_DOWNLOAD_MODELS_ON_START=1
+AI_REQUIRE_AUDIO_MODEL=1
+AI_BEATS_MODEL_PATH=/app/models/audio/beats/BEATs_iter3_plus_AS2M_finetuned_cpt2.pt
+AI_BEATS_SRC_DIR=/app/third_party/beats
 BACKEND_BASE_INTERNAL=http://backend:8000
 BACKEND_CONFIG_SYNC_BASE=http://backend:8000/api/ai/internal
 EOF
@@ -574,9 +606,12 @@ echo "Dashboard:   http://$PUBLIC_IP:8085"
 echo "API Docs:    http://$PUBLIC_IP:8085/api/schema/swagger-ui/"
 echo "MediaMTX HLS http://$PUBLIC_IP:8888"
 echo "MediaMTX RTC http://$PUBLIC_IP:8889"
+echo "RTSP publish rtsp://$PUBLIC_IP:8554/<stream_path>"
 echo "--------------------------------------------------------"
 echo "Next steps:"
 echo "1. Verify services: gcloud compute ssh $INSTANCE_NAME --zone=$ZONE --project=$PROJECT_ID --command='cd ~/$APP_DIR_NAME/repo && sudo docker compose ps'"
 echo "2. Create admin:    gcloud compute ssh $INSTANCE_NAME --zone=$ZONE --project=$PROJECT_ID --command='cd ~/$APP_DIR_NAME/repo && sudo docker compose exec backend python manage.py createsuperuser'"
-echo "3. Stop VM later:   bash gcp_stop.sh"
+echo "3. Publish local A/V: ffmpeg ... -f rtsp -rtsp_transport tcp rtsp://$PUBLIC_IP:8554/demo-av"
+echo "4. Stop VM later:   bash gcp_stop.sh"
+echo "Tip: set RTSP_SOURCE_RANGE=<your-public-ip>/32 before deploy to restrict publisher ingress."
 echo "========================================================"

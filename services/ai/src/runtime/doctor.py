@@ -240,9 +240,11 @@ class Doctor:
             local = hf_hub_download(repo_id=hf_repo_id, filename=hf_filename)
             # Copy to models/ (with optional rename)
             models_dir = PROJECT_ROOT / "models"
-            models_dir.mkdir(parents=True, exist_ok=True)
             final_name = local_rename if local_rename else hf_filename
-            dest = models_dir / final_name
+            dest = Path(final_name)
+            if not dest.is_absolute():
+                dest = models_dir / dest
+            dest.parent.mkdir(parents=True, exist_ok=True)
             if not dest.exists():
                 shutil.copy2(local, str(dest))
             tag = f"hf:{hf_repo_id}/{hf_filename}"
@@ -360,7 +362,7 @@ class Doctor:
                     )
 
         # ── 2. Checkpoint file ────────────────────────────────────────
-        raw_model_path = audio_cfg.get("model_path", "")
+        raw_model_path = os.getenv("AI_BEATS_MODEL_PATH") or audio_cfg.get("model_path", "")
         if not raw_model_path:
             raw_model_path = (
                 f"models/audio/beats/{_BEATS_DEFAULT_HF_FILE}"
@@ -410,9 +412,14 @@ class Doctor:
         # Strategy B: HuggingFace Hub (uses existing _try_hf_fetch)
         hf_repo = audio_cfg.get("hf_repo_id", _BEATS_DEFAULT_HF_REPO)
         hf_file = audio_cfg.get("hf_filename",  _BEATS_DEFAULT_HF_FILE)
+        models_dir = (PROJECT_ROOT / "models").resolve()
+        try:
+            local_rename = str(checkpoint_path.relative_to(models_dir))
+        except ValueError:
+            local_rename = str(checkpoint_path)
         fetched = cls._try_hf_fetch(
             hf_repo, hf_file, report,
-            local_rename=checkpoint_path.name,
+            local_rename=local_rename,
         )
         if fetched:
             audio_cfg["model_path"] = fetched

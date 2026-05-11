@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
     libgl1 \
+    libgomp1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -19,6 +20,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+RUN chmod +x scripts/docker-entrypoint.sh
 
 # Create required runtime dirs
 RUN mkdir -p evidence data/staging_uploads data/entity_store logs
@@ -30,4 +32,5 @@ EXPOSE 8080
 ENV PYTHONUNBUFFERED=1
 
 # Start the AI module — runs FastAPI on port 8080
+ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
 CMD ["python", "run.py"]

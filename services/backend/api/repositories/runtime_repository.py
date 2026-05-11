@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from api.models import (
@@ -119,22 +120,54 @@ class RuntimeRepository:
         relay_mode: str = MediaMTXDesiredPath.RelayMode.RELAY_ONLY,
         transcode_required: bool = False,
     ) -> MediaMTXDesiredPath:
-        desired_path, created = MediaMTXDesiredPath.objects.get_or_create(
-            camera=camera,
-            defaults={
-                "stream_path": stream_path,
-                "desired_enabled": desired_enabled,
-                "relay_mode": relay_mode,
-                "source_uri": source_uri,
-                "source_kind": source_kind,
-                "transcode_required": transcode_required,
-            },
+        stream_path = str(stream_path or "").strip()
+        conflicting_path = (
+            MediaMTXDesiredPath.objects
+            .select_related("camera")
+            .filter(stream_path=stream_path)
+            .exclude(camera=camera)
+            .first()
         )
+        if conflicting_path is not None:
+            if conflicting_path.camera_id is not None:
+                owner = conflicting_path.camera
+                owner_label = f"{owner.name} (ID {owner.pk})" if owner else f"camera ID {conflicting_path.camera_id}"
+                raise ValidationError({
+                    "stream_path": (
+                        f"Stream path '{stream_path}' is already used by {owner_label}. "
+                        "Edit that camera or choose a unique stream path."
+                    )
+                })
+
+            if MediaMTXDesiredPath.objects.filter(camera=camera).exclude(pk=conflicting_path.pk).exists():
+                raise ValidationError({
+                    "stream_path": (
+                        f"Stream path '{stream_path}' already exists as an unattached relay path, "
+                        "but this camera already has a relay path."
+                    )
+                })
+
+            desired_path = conflicting_path
+            desired_path.camera = camera
+            created = False
+        else:
+            desired_path, created = MediaMTXDesiredPath.objects.get_or_create(
+                camera=camera,
+                defaults={
+                    "stream_path": stream_path,
+                    "desired_enabled": desired_enabled,
+                    "relay_mode": relay_mode,
+                    "source_uri": source_uri,
+                    "source_kind": source_kind,
+                    "transcode_required": transcode_required,
+                },
+            )
         if not created:
             # Only bump generation when relay-significant fields actually change.
             # This prevents unnecessary cold applies after harmless saves.
             changed = False
             relay_fields = {
+                "camera": camera,
                 "stream_path": stream_path,
                 "desired_enabled": desired_enabled,
                 "relay_mode": relay_mode,
@@ -152,6 +185,7 @@ class RuntimeRepository:
                 desired_path.save(
                     update_fields=[
                         "stream_path",
+                        "camera",
                         "desired_enabled",
                         "relay_mode",
                         "source_uri",

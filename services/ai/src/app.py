@@ -216,8 +216,14 @@ class CameraProcessor:
 
         audio_cfg = self.models_cfg.get("models", {}).get("audio_anomaly", {})
         fusion_cfg = self.models_cfg.get("models", {}).get("video_audio_fusion", {})
+        enabled_lane_names = set(self.camera_cfg.get("enabled_lanes", []) or [])
+        self.audio_requested = bool(self.camera_cfg.get("audio_enabled")) or "audio_anomaly" in enabled_lane_names
 
-        if audio_cfg.get("enabled", False) and self.camera_cfg.get("source_type") != "live_camera":
+        if (
+            self.audio_requested
+            and audio_cfg.get("enabled", False)
+            and self.camera_cfg.get("source_type") != "live_camera"
+        ):
             self.audio_fusion = MultimodalFusion(self.camera_id, fusion_cfg, logger=self.logger)
             
             self.audio_ringbuffer = AudioRingBuffer(
@@ -227,11 +233,19 @@ class CameraProcessor:
             )
 
             rtsp_url = self.camera_cfg.get("rtsp_url", "")
+            chunk_s = float(audio_cfg.get("chunk_s", 1.0))
+            if "hop_s" in audio_cfg:
+                hop_s = float(audio_cfg.get("hop_s") or 0.5)
+            else:
+                overlap_s = float(audio_cfg.get("overlap_s", 0.25))
+                hop_s = max(0.05, chunk_s - overlap_s)
             self.audio_reader = FFmpegAudioReader(
-                rtsp_url=rtsp_url,
+                camera_id=self.camera_id,
+                source_url=rtsp_url,
                 sample_rate=audio_cfg.get("sample_rate", 16000),
-                chunk_duration_s=audio_cfg.get("chunk_s", 1.0),
-                overlap_s=audio_cfg.get("overlap_s", 0.25)
+                chunk_s=chunk_s,
+                hop_s=min(hop_s, chunk_s),
+                logger=self.logger,
             )
 
             self.audio_lane = AudioAnomalyLane(
@@ -424,7 +438,9 @@ class CameraProcessor:
         """Dedicated thread for reading audio chunks and running BEATs inference."""
         while self._running:
             try:
-                chunk = self.audio_reader.get_chunk()
+                if hasattr(self.audio_reader, "wait_for_chunk"):
+                    self.audio_reader.wait_for_chunk(timeout=0.5)
+                chunk = self.audio_reader.get_latest()
                 if chunk is None:
                     time.sleep(0.1)
                     continue
@@ -763,6 +779,7 @@ class CameraProcessor:
 
     # ------------------------------------------------------------------
     def get_stats(self) -> Dict[str, Any]:
+        audio_stats = self.audio_reader.stats() if self.audio_reader else None
         return {
             "camera_id": self.camera_id,
             "rtsp_url": self.camera_cfg.get("rtsp_url", ""),
@@ -770,6 +787,7 @@ class CameraProcessor:
             "enabled_lanes": list(self.camera_cfg.get("enabled_lanes", [])),
             "sample_hz": self.camera_cfg.get("sample_hz", 2.0),
             "source_type": self.camera_cfg.get("source_type", "rtsp"),
+            "audio_enabled": bool(self.camera_cfg.get("audio_enabled")),
             "connected": self.reader.is_connected(),
             "active": self.reader.is_connected(),
             "frames_processed": self.stats["frames_processed"],
@@ -779,6 +797,7 @@ class CameraProcessor:
             "active_lanes": list(self.lanes.keys()),
             "last_frame": self.stats["last_frame_ts"],
             "last_alert": self.stats["last_alert_ts"],
+            "audio": audio_stats,
         }
 
 

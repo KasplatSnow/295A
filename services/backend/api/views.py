@@ -214,13 +214,8 @@ class MembershipViewSet(TenantScopedViewSet):
 
 
 # ── MediaMTX helpers (Phase 4: canonical imports from shared module) ──
-from api.services.mediamtx_helpers import (
-    get_canonical_camera_id as _get_canonical_camera_id,       # backward-compat alias
-    get_mediamtx_api_base as _get_mediamtx_api_base,           # backward-compat alias
-    get_mediamtx_loopback_url as _get_mediamtx_loopback_url,   # backward-compat alias
-    classify_camera_source,
-    build_mediamtx_path_payload,
-)
+# ... canonical imports already handled at top-level ...
+
 
 from typing import Dict, List
 
@@ -261,11 +256,18 @@ class CameraViewSet(TenantScopedViewSet):
         """
         tenant = get_active_tenant(self.request)
         assert_non_viewer(self.request, tenant)
-        camera = camera_config_service.create_camera(
-            tenant=tenant,
-            attrs=dict(serializer.validated_data),
-        )
-        serializer.instance = camera
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+
+        try:
+            camera = camera_config_service.create_camera(
+                tenant=tenant,
+                attrs=dict(serializer.validated_data),
+            )
+            serializer.instance = camera
+        except DjangoValidationError as e:
+            # Convert Django internal validation error to DRF 400 response
+            raise DRFValidationError(e.message_dict if hasattr(e, 'message_dict') else e.messages)
         # NOTE: camera_config_service.create_camera() already persists
         # MediaMTXDesiredPath and emits outbox events. The reconciler
         # will apply the path to MediaMTX.
@@ -274,11 +276,17 @@ class CameraViewSet(TenantScopedViewSet):
         """Update camera — desired state is persisted by the service layer."""
         tenant = get_active_tenant(self.request)
         assert_non_viewer(self.request, tenant)
-        camera = camera_config_service.update_camera(
-            camera=serializer.instance,
-            attrs=dict(serializer.validated_data),
-        )
-        serializer.instance = camera
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+
+        try:
+            camera = camera_config_service.update_camera(
+                camera=serializer.instance,
+                attrs=dict(serializer.validated_data),
+            )
+            serializer.instance = camera
+        except DjangoValidationError as e:
+            raise DRFValidationError(e.message_dict if hasattr(e, 'message_dict') else e.messages)
         # NOTE: camera_config_service.update_camera() already persists
         # MediaMTXDesiredPath. The reconciler applies changes.
 

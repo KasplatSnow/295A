@@ -26,7 +26,7 @@ services:
     image: redis:7-alpine
     container_name: redis-FqgF
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -164,7 +164,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./services/ai/models:/app/models:ro
+      - ./services/ai/models:/app/models
       - ai-evidence:/app/evidence
       - ai-data:/app/data
     environment:
@@ -178,16 +178,23 @@ services:
       - AI_WEBHOOK_TOKEN=${AI_WEBHOOK_TOKEN:-}
       - AI_USE_REDIS_PUBLISH=${AI_USE_REDIS_PUBLISH:-1}
       - AI_REDIS_URL=${AI_REDIS_URL:-redis://redis:6379/0}
-      - AI_REDIS_HOST=redis
-      - AI_REDIS_PORT=6379
+      - AI_REDIS_HOST=${AI_REDIS_HOST:-redis}
+      - AI_REDIS_PORT=${AI_REDIS_PORT:-6379}
       - AI_INCIDENT_CHANNEL=${AI_INCIDENT_CHANNEL:-vigilzone.ai.incidents}
       - MEDIAMTX_INTERNAL_RTSP_URL=${MEDIAMTX_INTERNAL_RTSP_URL:-rtsp://mediamtx:8554}
       - AI_EVIDENCE_DIR=/app/evidence
       - AI_DATA_DIR=/app/data
       - AI_STAGING_DIR=/app/data/staging_uploads
       - AI_ENROLL_IMAGE_DIR=/app/data/enroll_images
+      - HF_HOME=${HF_HOME:-/app/data/hf_cache}
+      - TORCH_HOME=${TORCH_HOME:-/app/data/torch_cache}
+      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/app/data/cache}
+      - INSIGHTFACE_HOME=${INSIGHTFACE_HOME:-/app/data/insightface}
       - AI_CORS_ALLOWED_ORIGINS=${AI_CORS_ALLOWED_ORIGINS:-*}
+      - AI_DOWNLOAD_MODELS_ON_START=${AI_DOWNLOAD_MODELS_ON_START:-1}
+      - AI_REQUIRE_AUDIO_MODEL=${AI_REQUIRE_AUDIO_MODEL:-1}
       - AI_BEATS_MODEL_PATH=${AI_BEATS_MODEL_PATH:-/app/models/audio/beats/BEATs_iter3_plus_AS2M_finetuned_cpt2.pt}
+      - AI_BEATS_SRC_DIR=${AI_BEATS_SRC_DIR:-/app/third_party/beats}
       - AI_AUDIO_ENABLED=${AI_AUDIO_ENABLED:-true}
       - AI_AUDIO_SAMPLE_RATE=${AI_AUDIO_SAMPLE_RATE:-16000}
       - AI_LEARNED_FUSION_MODE=${AI_LEARNED_FUSION_MODE:-shadow}
@@ -230,6 +237,32 @@ services:
       - vigilzone
     restart: unless-stopped
     command: ["python", "manage.py", "outbox_stream_publisher"]
+
+  notification_backfill_worker:
+    build:
+      context: ./services/backend
+      dockerfile: Dockerfile
+    environment:
+      - DJANGO_DEBUG=${DJANGO_DEBUG:-1}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://vigilzone:vigilzone@postgres:5432/vigilzone}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-django-insecure-dev-only-change-me}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - AI_INCIDENT_CHANNEL=${AI_INCIDENT_CHANNEL:-vigilzone.ai.incidents}
+    depends_on:
+      backend_migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - vigilzone
+    restart: unless-stopped
+    command: ["python", "manage.py", "process_notification_backfill"]
 
   entity_embedding_worker:
     build:

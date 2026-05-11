@@ -18,6 +18,7 @@ Design rules (plan Section 6.7):
 from __future__ import annotations
 
 import math
+import os
 import sys
 import threading
 import time
@@ -145,12 +146,13 @@ class AudioAnomalyLane:
         self._last_chunk_ts: Optional[str] = None
         self._last_alert_ts: Optional[str] = None
         self._avg_latency_ms: float = 0.0
+        self._last_heartbeat_at: float = 0.0
 
     # ── Lazy model loading ─────────────────────────────────────────────────────
 
     def _resolve_model_path(self) -> str:
         """Resolve model_path relative to AI root if not absolute."""
-        p = self._model_path
+        p = os.getenv("AI_BEATS_MODEL_PATH") or self._model_path
         if not p:
             p = f"models/audio/beats/BEATs_iter3_plus_AS2M_finetuned_cpt2.pt"
         path = Path(p)
@@ -279,11 +281,21 @@ class AudioAnomalyLane:
         latency_ms = (time.perf_counter() - t0) * 1000
         self._infer_count += 1
 
-        # Exponential moving average of latency
         self._avg_latency_ms = (
             0.9 * self._avg_latency_ms + 0.1 * latency_ms
             if self._infer_count > 1 else latency_ms
         )
+
+        # ── Heartbeat Diagnostic (Plan Section 11) ─────────────────────────
+        now = time.time()
+        if now - self._last_heartbeat_at >= 5.0:
+            rms = np.sqrt(np.mean(chunk.samples**2))
+            self.logger.info(
+                f"AudioHeartbeat: cam={self.camera_id} seq={chunk.seq} "
+                f"rms={rms:.4f} latency={latency_ms:.1f}ms "
+                f"unc={uncertainty['composite']:.3f}"
+            )
+            self._last_heartbeat_at = now
 
         # Map raw top-k to canonical labels
         mapped = map_topk(raw_topk, min_score=self._min_raw)

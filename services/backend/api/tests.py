@@ -556,6 +556,36 @@ class CameraTests(APITestCase):
         camera = Camera.objects.get(tenant=self.tenant, name='Quoted URL Camera')
         self.assertEqual(camera.rtsp_url, 'http://67.53.46.161:65123/mjpg/video.mjpg')
 
+    def test_create_camera_rejects_duplicate_stream_path_cleanly(self):
+        first_response = self.client.post(
+            '/api/cameras/',
+            {
+                'name': 'Audio Video Test',
+                'status': 'active',
+                'source_type': 'webcam',
+                'stream_path': 'test-audio-video-stream',
+                'ai_camera_id': 'test-audio-video-stream',
+            },
+            format='json',
+        )
+        self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
+
+        duplicate_response = self.client.post(
+            '/api/cameras/',
+            {
+                'name': 'Duplicate Audio Video Test',
+                'status': 'active',
+                'source_type': 'webcam',
+                'stream_path': 'test-audio-video-stream',
+                'ai_camera_id': 'test-audio-video-stream-2',
+            },
+            format='json',
+        )
+
+        self.assertEqual(duplicate_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('stream_path', duplicate_response.data)
+        self.assertEqual(Camera.objects.filter(stream_path='test-audio-video-stream').count(), 1)
+
 
 class AuditDisplayAndDebugAccessTests(APITestCase):
     def setUp(self):
