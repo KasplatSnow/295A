@@ -30,7 +30,7 @@ SSH_SOURCE_RANGE="${SSH_SOURCE_RANGE:-0.0.0.0/0}"
 RTSP_SOURCE_RANGE="${RTSP_SOURCE_RANGE:-0.0.0.0/0}"
 APP_DIR_NAME="${APP_DIR_NAME:-vigilzone-monolith}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-vigilzone}"
-GIT_REPO_URL="${GIT_REPO_URL:-https://github.com/Dev228-afk/Vigilzone.git}"
+GIT_REPO_URL="${GIT_REPO_URL:-https://github.com/KasplatSnow/295A.git}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
 STATIC_IP_NAME="${STATIC_IP_NAME:-${INSTANCE_NAME}-ip}"
 RESERVE_STATIC_IP="${RESERVE_STATIC_IP:-1}"
@@ -217,7 +217,17 @@ if ! gcloud compute instances describe "$INSTANCE_NAME" --zone="$ZONE" --project
         --boot-disk-size="$BOOT_DISK_SIZE" \
         --boot-disk-type="$BOOT_DISK_TYPE"
 else
-    echo "Instance already exists; ensuring it is running..."
+    echo "Instance already exists; ensuring machine type is $MACHINE_TYPE..."
+    CURRENT_MACHINE_TYPE="$(basename "$(gcloud compute instances describe "$INSTANCE_NAME" --zone="$ZONE" --project="$PROJECT_ID" --format='get(machineType)')")"
+    if [ "$CURRENT_MACHINE_TYPE" != "$MACHINE_TYPE" ]; then
+        echo "Updating machine type: $CURRENT_MACHINE_TYPE -> $MACHINE_TYPE"
+        gcloud compute instances stop "$INSTANCE_NAME" --zone="$ZONE" --project="$PROJECT_ID" --quiet
+        gcloud compute instances set-machine-type "$INSTANCE_NAME" \
+            --zone="$ZONE" \
+            --project="$PROJECT_ID" \
+            --machine-type="$MACHINE_TYPE"
+    fi
+    echo "Ensuring instance is running..."
     gcloud compute instances start "$INSTANCE_NAME" --zone="$ZONE" --project="$PROJECT_ID" >/dev/null 2>&1 || true
 fi
 
