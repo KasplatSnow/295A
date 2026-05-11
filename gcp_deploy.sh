@@ -19,6 +19,7 @@ PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
 INSTANCE_NAME="${INSTANCE_NAME:-vigilzone-monolith}"
 ZONE="${ZONE:-us-central1-a}"
 REGION="${REGION:-${ZONE%-*}}"
+ZONE_FALLBACKS="${ZONE_FALLBACKS:-${REGION}-b,${REGION}-c,${REGION}-f}"
 MACHINE_TYPE="${MACHINE_TYPE:-n2-highmem-8}"
 BOOT_DISK_SIZE="${BOOT_DISK_SIZE:-50GB}"
 BOOT_DISK_TYPE="${BOOT_DISK_TYPE:-pd-ssd}"
@@ -151,6 +152,44 @@ maybe_reserve_static_ip() {
     fi
 }
 
+select_create_zone() {
+    if gcloud compute instances describe "$INSTANCE_NAME" --zone="$ZONE" --project="$PROJECT_ID" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local candidate create_output
+    IFS=',' read -r -a zone_candidates <<< "$ZONE_FALLBACKS"
+    zone_candidates=("$ZONE" "${zone_candidates[@]}")
+
+    for candidate in "${zone_candidates[@]}"; do
+        [ -n "$candidate" ] || continue
+        echo "Trying zone $candidate for $MACHINE_TYPE ..."
+        if create_output="$(gcloud compute instances create "$INSTANCE_NAME" \
+            --project="$PROJECT_ID" \
+            --zone="$candidate" \
+            --machine-type="$MACHINE_TYPE" \
+            --tags="$INSTANCE_TAG" \
+            --image-family=ubuntu-2204-lts \
+            --image-project=ubuntu-os-cloud \
+            --boot-disk-size="$BOOT_DISK_SIZE" \
+            --boot-disk-type="$BOOT_DISK_TYPE" 2>&1)"; then
+            ZONE="$candidate"
+            REGION="${ZONE%-*}"
+            echo "$create_output"
+            return 0
+        fi
+        echo "$create_output"
+        if [[ "$create_output" == *"ZONE_RESOURCE_POOL_EXHAUSTED"* || "$create_output" == *"resource_availability"* ]]; then
+            echo "Zone $candidate is capacity constrained; trying next fallback."
+            continue
+        fi
+        return 1
+    done
+
+    echo "ERROR: no fallback zones could provision $MACHINE_TYPE."
+    return 1
+}
+
 trap cleanup_local_artifacts EXIT
 
 echo "--- Starting VigilZone Deployment on GCP [$PROJECT_ID] ---"
@@ -207,15 +246,7 @@ fi
 
 echo "[3/7] Provisioning VM instance ($MACHINE_TYPE)..."
 if ! gcloud compute instances describe "$INSTANCE_NAME" --zone="$ZONE" --project="$PROJECT_ID" >/dev/null 2>&1; then
-    gcloud compute instances create "$INSTANCE_NAME" \
-        --project="$PROJECT_ID" \
-        --zone="$ZONE" \
-        --machine-type="$MACHINE_TYPE" \
-        --tags="$INSTANCE_TAG" \
-        --image-family=ubuntu-2204-lts \
-        --image-project=ubuntu-os-cloud \
-        --boot-disk-size="$BOOT_DISK_SIZE" \
-        --boot-disk-type="$BOOT_DISK_TYPE"
+    select_create_zone
 else
     echo "Instance already exists; ensuring machine type is $MACHINE_TYPE..."
     CURRENT_MACHINE_TYPE="$(basename "$(gcloud compute instances describe "$INSTANCE_NAME" --zone="$ZONE" --project="$PROJECT_ID" --format='get(machineType)')")"
