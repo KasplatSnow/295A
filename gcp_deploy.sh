@@ -44,8 +44,11 @@ MEDIAMTX_READY_URL="${MEDIAMTX_READY_URL:-http://127.0.0.1:9997/v3/config/global
 TMP_DIR="${TMPDIR:-/tmp}"
 REMOTE_ENV_FILE="vigilzone.cloud.env"
 REMOTE_BOOTSTRAP_FILE="gcp.remote-bootstrap.sh"
+REMOTE_BEATS_MODEL_FILE="BEATs_iter3_plus_AS2M_finetuned_cpt2.pt"
 ENV_FILE="$TMP_DIR/$REMOTE_ENV_FILE"
 BOOTSTRAP_FILE="$TMP_DIR/$REMOTE_BOOTSTRAP_FILE"
+LOCAL_BEATS_MODEL_PATH="${LOCAL_BEATS_MODEL_PATH:-$SCRIPT_DIR/services/ai/models/audio/beats/$REMOTE_BEATS_MODEL_FILE}"
+UPLOAD_BEATS_MODEL="${UPLOAD_BEATS_MODEL:-auto}"
 SSH_KEY_FILE="${SSH_KEY_FILE:-$HOME/.ssh/google_compute_engine}"
 SSH_CONNECT_TIMEOUT_SECONDS="${SSH_CONNECT_TIMEOUT_SECONDS:-12}"
 SSH_READY_RETRIES="${SSH_READY_RETRIES:-24}"
@@ -67,6 +70,23 @@ fi
 
 cleanup_local_artifacts() {
     rm -f "$ENV_FILE" "$BOOTSTRAP_FILE"
+}
+
+detect_local_beats_model() {
+    HAVE_LOCAL_BEATS_MODEL=0
+    if [ -f "$LOCAL_BEATS_MODEL_PATH" ]; then
+        HAVE_LOCAL_BEATS_MODEL=1
+        echo "Found local BEATs checkpoint: $LOCAL_BEATS_MODEL_PATH"
+        return 0
+    fi
+
+    if [ "$UPLOAD_BEATS_MODEL" = "required" ]; then
+        echo "ERROR: required local BEATs checkpoint not found: $LOCAL_BEATS_MODEL_PATH"
+        exit 1
+    fi
+
+    echo "WARNING: local BEATs checkpoint not found: $LOCAL_BEATS_MODEL_PATH"
+    echo "         Deploy will continue and AI will rely on runtime download."
 }
 
 ensure_local_ssh_key() {
@@ -191,6 +211,8 @@ select_create_zone() {
 }
 
 trap cleanup_local_artifacts EXIT
+
+detect_local_beats_model
 
 echo "--- Starting VigilZone Deployment on GCP [$PROJECT_ID] ---"
 
@@ -388,6 +410,7 @@ set -euo pipefail
 BOOTSTRAP_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="\$BOOTSTRAP_DIR/$APP_DIR_NAME"
 REMOTE_ENV_PATH="\$BOOTSTRAP_DIR/$REMOTE_ENV_FILE"
+REMOTE_BEATS_MODEL_PATH="\$BOOTSTRAP_DIR/$REMOTE_BEATS_MODEL_FILE"
 WAIT_RETRIES="$BOOTSTRAP_WAIT_RETRIES"
 WAIT_SECONDS="$BOOTSTRAP_WAIT_SECONDS"
 BACKEND_READY_URL="$BACKEND_READY_URL"
@@ -568,6 +591,12 @@ fi
 
 mv "\$REMOTE_ENV_PATH" "\$COMPOSE_ROOT/.env"
 
+if [ -f "\$REMOTE_BEATS_MODEL_PATH" ]; then
+    mkdir -p "\$COMPOSE_ROOT/services/ai/models/audio/beats"
+    mv "\$REMOTE_BEATS_MODEL_PATH" "\$COMPOSE_ROOT/services/ai/models/audio/beats/$REMOTE_BEATS_MODEL_FILE"
+    echo "Provisioned local BEATs checkpoint into compose workspace."
+fi
+
 cd "\$COMPOSE_ROOT"
 \$COMPOSE_CMD down --remove-orphans --timeout 30 || true
 sudo docker container prune -f >/dev/null 2>&1 || true
@@ -619,8 +648,12 @@ chmod +x "$BOOTSTRAP_FILE"
 
 echo "[6/7] Packaging and uploading code..."
 echo "Deploy source: $GIT_REPO_URL ($GIT_BRANCH)"
+SCP_SOURCES=("$ENV_FILE" "$BOOTSTRAP_FILE")
+if [ "$HAVE_LOCAL_BEATS_MODEL" -eq 1 ]; then
+    SCP_SOURCES+=("$LOCAL_BEATS_MODEL_PATH")
+fi
 
-gcloud compute scp "$ENV_FILE" "$BOOTSTRAP_FILE" \
+gcloud compute scp "${SCP_SOURCES[@]}" \
     "$INSTANCE_NAME:~/" \
     --zone="$ZONE" \
     --project="$PROJECT_ID" \
