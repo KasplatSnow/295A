@@ -773,6 +773,7 @@ def ai_internal_cameras_snapshot(request):
                 "sample_hz": sample_hz,
                 "enabled_lanes": enabled_lanes,
                 "entity_detection_enabled": camera_identity_enabled,
+                "audio_enabled": bool(camera.audio_enabled),
                 "identity_runtime_enabled": runtime_identity_enabled,
                 "effective_entity_detection_enabled": effective_entity_detection_enabled,
                 "k_of_n": [camera.k_of_n_k, camera.k_of_n_n],

@@ -64,6 +64,8 @@ class CameraSafeSerializer(serializers.ModelSerializer):
             "min_confidence", "min_bbox_area", "k_of_n_k", "k_of_n_n", "cooldown_s",
             "enabled_lanes",
             "entity_detection_enabled",
+            "audio_enabled",
+            "uncertainty_threshold", "normality_ema_alpha", "learned_fusion_mode",
             "is_ai_synced",
             "created_at", "updated_at", "tenant",
         ]
@@ -113,6 +115,8 @@ class CameraWriteSerializer(serializers.ModelSerializer):
             "id", "name", "site", "rtsp_url", "ai_camera_id", "stream_path", "status",
             "camera_type", "source_type", "min_confidence", "min_bbox_area",
             "k_of_n_k", "k_of_n_n", "cooldown_s", "enabled_lanes", "entity_detection_enabled",
+            "audio_enabled",
+            "uncertainty_threshold", "normality_ema_alpha", "learned_fusion_mode",
             "is_ai_synced",
             "created_at", "updated_at", "tenant",
             # legacy aliases

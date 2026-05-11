@@ -20,6 +20,7 @@ const AI_LANES = [
   { id: "person_zone", label: "Zone Line Crossing / Intrusion" },
   { id: "fire_smoke_yolo", label: "Fire & Smoke Detection" },
   { id: "yolov8_fallback", label: "Lightweight Fallback (YOLOv8)" },
+  { id: "audio_anomaly", label: "BEATs Audio Anomaly Detection" },
 ];
 
 interface Camera {
@@ -30,8 +31,12 @@ interface Camera {
   rtsp_url?: string;
   ai_camera_id: string;
   stream_path?: string;
+  audio_enabled?: boolean;
   is_ai_synced?: boolean;
   enabled_lanes?: string[];
+  uncertainty_threshold?: number;
+  normality_ema_alpha?: number;
+  learned_fusion_mode?: "off" | "shadow" | "active";
   created_at: string;
   tenant?: number;
 }
@@ -47,7 +52,11 @@ export default function Cameras() {
     rtsp_url: "",
     ai_camera_id: "",
     stream_path: "",
+    audio_enabled: false,
     enabled_lanes: ["rt_detr", "person_zone"],
+    uncertainty_threshold: 0.6,
+    normality_ema_alpha: 0.05,
+    learned_fusion_mode: "off",
   });
 
   const [editCamera, setEditCamera] = useState<Camera | null>(null);
@@ -57,8 +66,12 @@ export default function Cameras() {
     rtsp_url: "",
     ai_camera_id: "",
     stream_path: "",
+    audio_enabled: false,
     status: "active",
     enabled_lanes: ["rt_detr", "person_zone"],
+    uncertainty_threshold: 0.6,
+    normality_ema_alpha: 0.05,
+    learned_fusion_mode: "off",
   });
 
   const camerasQ = useQuery({
@@ -78,7 +91,11 @@ export default function Cameras() {
         rtsp_url: cam.rtsp_url,
         ai_camera_id: cam.ai_camera_id,
         stream_path: cam.stream_path,
+        audio_enabled: cam.audio_enabled,
         enabled_lanes: cam.enabled_lanes,
+        uncertainty_threshold: cam.uncertainty_threshold,
+        normality_ema_alpha: cam.normality_ema_alpha,
+        learned_fusion_mode: cam.learned_fusion_mode,
         status: "active",
       });
       // AI Sync is now manually triggered via the "Sync AI" button in the table actions
@@ -88,7 +105,7 @@ export default function Cameras() {
     onSuccess: () => {
       toast({ title: "Camera added" });
       queryClient.invalidateQueries({ queryKey: ["cameras"] });
-      setNewCamera({ name: "", site: "", rtsp_url: "", ai_camera_id: "", stream_path: "", enabled_lanes: ["rt_detr", "person_zone"] });
+      setNewCamera({ name: "", site: "", rtsp_url: "", ai_camera_id: "", stream_path: "", audio_enabled: false, enabled_lanes: ["rt_detr", "person_zone"] });
       setIsDialogOpen(false);
     },
     onError: () => {
@@ -148,8 +165,12 @@ export default function Cameras() {
       rtsp_url: cam.rtsp_url ?? "",
       ai_camera_id: cam.ai_camera_id ?? "",
       stream_path: cam.stream_path ?? "",
+      audio_enabled: cam.audio_enabled ?? false,
       status: cam.status ?? "active",
       enabled_lanes: cam.enabled_lanes ?? ["rt_detr", "person_zone"],
+      uncertainty_threshold: cam.uncertainty_threshold ?? 0.6,
+      normality_ema_alpha: cam.normality_ema_alpha ?? 0.05,
+      learned_fusion_mode: (cam.learned_fusion_mode as "off"|"shadow"|"active") ?? "off",
     });
   };
 
@@ -252,6 +273,16 @@ export default function Cameras() {
                 <Label htmlFor="stream-path">Stream Path (optional)</Label>
                 <Input id="stream-path" value={newCamera.stream_path} onChange={(e) => setNewCamera({ ...newCamera, stream_path: e.target.value })} />
               </div>
+              <div className="flex items-center space-x-2 py-2">
+                <Checkbox 
+                  id="audio-enabled" 
+                  checked={newCamera.audio_enabled}
+                  onCheckedChange={(checked) => setNewCamera({ ...newCamera, audio_enabled: !!checked })}
+                />
+                <label htmlFor="audio-enabled" className="text-sm cursor-pointer select-none">
+                  Enable Audio Detection (requires capable camera)
+                </label>
+              </div>
               <div className="space-y-2">
                 <Label>AI Detection Lanes</Label>
                 <div className="flex flex-col gap-2 border rounded-md p-3 bg-muted/20">
@@ -270,6 +301,33 @@ export default function Cameras() {
                       <label htmlFor={`new-lane-${lane.id}`} className="text-sm cursor-pointer select-none">{lane.label}</label>
                     </div>
                   ))}
+                </div>
+              </div>
+              
+              <div className="space-y-4 border rounded-md p-4 bg-muted/10 mt-4">
+                <h4 className="text-sm font-semibold">Phase 2: Multimodal Fusion & Uncertainty</h4>
+                <div className="space-y-2">
+                  <Label htmlFor="learned-fusion-mode">Learned Fusion Mode</Label>
+                  <Select value={newCamera.learned_fusion_mode} onValueChange={(v: "off"|"shadow"|"active") => setNewCamera({ ...newCamera, learned_fusion_mode: v })}>
+                    <SelectTrigger id="learned-fusion-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="off">Off (Deterministic Only)</SelectItem>
+                      <SelectItem value="shadow">Shadow (Telemetry Only)</SelectItem>
+                      <SelectItem value="active">Active (Gate Alerts)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="uncertainty">Uncertainty Threshold</Label>
+                    <Input id="uncertainty" type="number" step="0.1" min="0" max="1" value={newCamera.uncertainty_threshold} onChange={(e) => setNewCamera({ ...newCamera, uncertainty_threshold: parseFloat(e.target.value) || 0.6 })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ema">Normality EMA Alpha</Label>
+                    <Input id="ema" type="number" step="0.01" min="0" max="1" value={newCamera.normality_ema_alpha} onChange={(e) => setNewCamera({ ...newCamera, normality_ema_alpha: parseFloat(e.target.value) || 0.05 })} />
+                  </div>
                 </div>
               </div>
             </div>
@@ -405,6 +463,16 @@ export default function Cameras() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex items-center space-x-2 py-2">
+              <Checkbox 
+                id="edit-audio-enabled" 
+                checked={editForm.audio_enabled}
+                onCheckedChange={(checked) => setEditForm({ ...editForm, audio_enabled: !!checked })}
+              />
+              <label htmlFor="edit-audio-enabled" className="text-sm cursor-pointer select-none">
+                Enable Audio Detection (requires capable camera)
+              </label>
+            </div>
             <div className="space-y-2">
               <Label>AI Detection Lanes</Label>
               <div className="flex flex-col gap-2 border rounded-md p-3 bg-muted/20">
@@ -424,8 +492,35 @@ export default function Cameras() {
                   </div>
                 ))}
               </div>
+              </div>
+              
+              <div className="space-y-4 border rounded-md p-4 bg-muted/10 mt-4">
+                <h4 className="text-sm font-semibold">Phase 2: Multimodal Fusion & Uncertainty</h4>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-learned-fusion-mode">Learned Fusion Mode</Label>
+                  <Select value={editForm.learned_fusion_mode} onValueChange={(v: "off"|"shadow"|"active") => setEditForm({ ...editForm, learned_fusion_mode: v })}>
+                    <SelectTrigger id="edit-learned-fusion-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="off">Off (Deterministic Only)</SelectItem>
+                      <SelectItem value="shadow">Shadow (Telemetry Only)</SelectItem>
+                      <SelectItem value="active">Active (Gate Alerts)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-uncertainty">Uncertainty Threshold</Label>
+                    <Input id="edit-uncertainty" type="number" step="0.1" min="0" max="1" value={editForm.uncertainty_threshold} onChange={(e) => setEditForm({ ...editForm, uncertainty_threshold: parseFloat(e.target.value) || 0.6 })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-ema">Normality EMA Alpha</Label>
+                    <Input id="edit-ema" type="number" step="0.01" min="0" max="1" value={editForm.normality_ema_alpha} onChange={(e) => setEditForm({ ...editForm, normality_ema_alpha: parseFloat(e.target.value) || 0.05 })} />
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
           <DialogFooter>
             {editCamera && (
               <>

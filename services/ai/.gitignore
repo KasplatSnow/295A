@@ -78,4 +78,14 @@ uploads/*
 *.zip
 
 # Runtime-cloned repos (auto-fetched by Doctor at startup)
-third_party/
+# Keep third_party/beats source files (BEATs.py, Tokenizers.py) tracked
+# but ignore everything in Paper-AnyAnomaly and similar cloned repos.
+third_party/Paper-AnyAnomaly/
+# BEATs vendored source IS tracked (no wildcard exclusion for third_party/beats/)
+
+# Audio model weights (large, download separately — see models/audio/beats/README.md)
+models/audio/beats/*.pt
+models/audio/beats/*.pth
+
+# Audio evidence clips (generated at runtime)
+evidence/audio/

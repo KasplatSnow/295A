@@ -125,6 +125,8 @@ export default function Dashboard() {
       confidence: entity.confidence,
       sourceLabel: incident.camera__source_type === "webcam" ? "Webcam" : "Registered",
       severity: incident.severity,
+      modality: details?.modality as string | undefined,
+      modalities: details?.modalities as string[] | undefined,
     };
   });
 
@@ -274,6 +276,8 @@ export default function Dashboard() {
                       entity={alert.entity}
                       confidence={alert.confidence}
                       sourceLabel={alert.sourceLabel}
+                      modality={alert.modality}
+                      modalities={alert.modalities}
                       onClick={() => setLocation(`/incidents/${alert.id}`)}
                     />
                   </div>

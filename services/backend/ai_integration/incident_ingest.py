@@ -122,6 +122,7 @@ INCIDENT_TYPE_MAP = {
     "fall":             Incident.Type.OTHER,
     "animal":           Incident.Type.OTHER,
     "anomaly":          Incident.Type.OTHER,
+    "audio_anomaly":    Incident.Type.AUDIO_ANOMALY,
 }
 
 SEVERITY_MAP = {
@@ -244,6 +245,7 @@ def _normalize_alert_type(raw) -> str:
         "fall": "fall",
         "animal": "animal",
         "anomaly": "anomaly",
+        "audio_anomaly": "audio_anomaly",
     }
     return aliases.get(text, text)
 
@@ -485,6 +487,15 @@ def process_alert_event(
                 existing.details["recognized_entity"] = recognized_entity
             if clip_url:
                 existing.details["clip_url"] = clip_url
+                
+            # Phase 2: Ingest telemetry
+            debug_info = data.get("debug", {})
+            if "learned_fusion_shadow_score" in debug_info:
+                existing.details["shadow_score"] = debug_info["learned_fusion_shadow_score"]
+            if "audio_uncertainty" in debug_info:
+                unc = debug_info["audio_uncertainty"]
+                existing.details["uncertainty"] = unc.get("composite", 0.0) if isinstance(unc, dict) else float(unc)
+                
             if media_key:
                 existing.media_key = media_key
             existing.save(update_fields=["severity", "details", "media_key", "updated_at"])
@@ -503,6 +514,15 @@ def process_alert_event(
                 details_dict["recognized_entity"] = recognized_entity
             if clip_url:
                 details_dict["clip_url"] = clip_url
+                
+            # Phase 2: Ingest telemetry
+            debug_info = data.get("debug", {})
+            if "learned_fusion_shadow_score" in debug_info:
+                details_dict["shadow_score"] = debug_info["learned_fusion_shadow_score"]
+            if "audio_uncertainty" in debug_info:
+                unc = debug_info["audio_uncertainty"]
+                details_dict["uncertainty"] = unc.get("composite", 0.0) if isinstance(unc, dict) else float(unc)
+
             incident = Incident(
                 tenant=tenant,
                 camera=camera,

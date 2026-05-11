@@ -59,6 +59,14 @@ from src.lanes.anyanomaly import AnyAnomalyLane
 from src.lanes.anomalyclip import AnomalyCLIPLane
 from src.lanes.temporal_verifier import TemporalVerifierLane
 from src.lanes.entity_identity import EntityIdentityLane
+from src.lanes.audio_anomaly import AudioAnomalyLane
+
+# Audio Ingestion & Evidence
+from src.ingest.audio_reader import FFmpegAudioReader
+from src.evidence.audio_ringbuffer import AudioRingBuffer
+
+# Multimodal Fusion
+from src.logic.multimodal_fusion import MultimodalFusion, register_fusion_lane
 
 # Identity subsystem
 from src.identity.store import EntityStore
@@ -198,6 +206,40 @@ class CameraProcessor:
         # yolov8_fallback conditional mode — skip when RT-DETR found detections
         self._fallback_conditional = True
         self._last_rtdetr_had_dets = False
+
+        # PR-02/03/04: Audio subsystem
+        self.audio_lane = None
+        self.audio_reader = None
+        self.audio_ringbuffer = None
+        self.audio_fusion = None
+        self._audio_thread = None
+
+        audio_cfg = self.models_cfg.get("models", {}).get("audio_anomaly", {})
+        fusion_cfg = self.models_cfg.get("models", {}).get("video_audio_fusion", {})
+
+        if audio_cfg.get("enabled", False) and self.camera_cfg.get("source_type") != "live_camera":
+            self.audio_fusion = MultimodalFusion(self.camera_id, fusion_cfg, logger=self.logger)
+            
+            self.audio_ringbuffer = AudioRingBuffer(
+                camera_id=self.camera_id, 
+                sample_rate=audio_cfg.get("sample_rate", 16000),
+                max_seconds=30.0
+            )
+
+            rtsp_url = self.camera_cfg.get("rtsp_url", "")
+            self.audio_reader = FFmpegAudioReader(
+                rtsp_url=rtsp_url,
+                sample_rate=audio_cfg.get("sample_rate", 16000),
+                chunk_duration_s=audio_cfg.get("chunk_s", 1.0),
+                overlap_s=audio_cfg.get("overlap_s", 0.25)
+            )
+
+            self.audio_lane = AudioAnomalyLane(
+                camera_id=self.camera_id,
+                cfg=audio_cfg,
+                models_cfg=self.models_cfg,
+                logger=self.logger
+            )
 
         # Control
         self._running = False
@@ -352,6 +394,13 @@ class CameraProcessor:
         self.reader.start()
         self._thread = threading.Thread(target=self._process_loop, daemon=True)
         self._thread.start()
+        
+        if self.audio_reader:
+            self.audio_reader.start()
+            self._audio_thread = threading.Thread(target=self._audio_loop, daemon=True)
+            self._audio_thread.start()
+            self.logger.info("Started audio processor")
+            
         self.logger.info("Started camera processor")
 
     def stop(self):
@@ -359,10 +408,39 @@ class CameraProcessor:
         self.reader.stop()
         if self._thread:
             self._thread.join(timeout=5.0)
+            
+        if self.audio_reader:
+            self.audio_reader.stop()
+        if self._audio_thread:
+            self._audio_thread.join(timeout=2.0)
+            
         # Shutdown thread pools gracefully
         self._lane_pool.shutdown(wait=False)
         self._evidence_pool.shutdown(wait=False)
         self.logger.info("Stopped camera processor")
+
+    # ------------------------------------------------------------------
+    def _audio_loop(self):
+        """Dedicated thread for reading audio chunks and running BEATs inference."""
+        while self._running:
+            try:
+                chunk = self.audio_reader.get_chunk()
+                if chunk is None:
+                    time.sleep(0.1)
+                    continue
+                
+                # 1. Add to evidence ringbuffer
+                self.audio_ringbuffer.add_chunk(chunk)
+                
+                # 2. Infer
+                obs = self.audio_lane.infer_audio(chunk)
+                
+                # 3. Feed fusion layer
+                if obs and self.audio_fusion:
+                    self.audio_fusion.feed_audio(obs)
+            except Exception as e:
+                self.logger.error(f"Audio loop error: {e}")
+                time.sleep(1.0)
 
     # ------------------------------------------------------------------
     def _process_loop(self):
@@ -432,6 +510,10 @@ class CameraProcessor:
                 if alert:
                     self.stats["last_alert_ts"] = alert.ts_utc
                     self.logger.info(f"ALERT: {alert.type}")
+
+                # Feed fusion layer with video obs
+                if self.audio_fusion:
+                    self.audio_fusion.feed_video([obs])
 
             except Exception as e:
                 self.logger.error(f"Lane {lane_name} error: {e}")
@@ -541,6 +623,18 @@ class CameraProcessor:
                         lane_inflight_started[lane_name] = now
 
                 # ──────────────────────────────────────────────────────
+
+                # Process any fused multimodal observations
+                if self.audio_fusion:
+                    for f_obs in self.audio_fusion.flush():
+                        alert = self.aggregator.process_observation(
+                            f_obs,
+                            evidence_request_callback=self._request_evidence_async,
+                            ringbuffer=self.ringbuffer,
+                        )
+                        if alert:
+                            self.stats["last_alert_ts"] = alert.ts_utc
+                            self.logger.info(f"FUSED ALERT: {alert.type}")
 
                 frame_count += 1
                 self.stats["frames_processed"] = frame_count
@@ -737,6 +831,9 @@ class CCTVAIModule:
         self.evidence_exporter = EvidenceExporter(
             evidence_dir=str(get_ai_evidence_dir(parent_dir))
         )
+
+        # Register fusion lane
+        register_fusion_lane(self.aggregator)
 
         # Runtime: GPU scheduler
         runtime_cfg = self.models_cfg.get("runtime", {})

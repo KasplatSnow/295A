@@ -146,6 +146,11 @@ export default function IncidentDetails() {
   // Build timeline from details JSON if available, otherwise show detection event
   const timeline: Array<{ time: string; event: string }> = [];
   const det = inc.details as any;
+  const audioUrl = det?.evidence?.audio_url ?? null;
+  const modality = det?.modality ?? "video";
+  const fusion = det?.fusion ?? null;
+  const audioEv = det?.audio ?? null;
+  const videoEv = det?.video ?? null;
   const recognizedEntity = (det?.recognized_entity && typeof det.recognized_entity === "object")
     ? det.recognized_entity as Record<string, unknown>
     : null;
@@ -184,7 +189,7 @@ export default function IncidentDetails() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left: Snapshot */}
         <Card className="p-6">
-          <h2 className="text-lg font-semibold mb-4">Video Snapshot</h2>
+          <h2 className="text-lg font-semibold mb-4">Evidence Media</h2>
           <div className="relative aspect-video bg-muted rounded-lg overflow-hidden mb-4">
             {clipUrl ? (
               <video
@@ -197,10 +202,16 @@ export default function IncidentDetails() {
               <img src={snapshotSrc} alt="Incident snapshot" className="w-full h-full object-cover" />
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground">
-                No snapshot available
+                No video snapshot available
               </div>
             )}
           </div>
+          {audioUrl && (
+            <div className="mb-4">
+              <h3 className="text-sm font-semibold mb-2">Audio Recording</h3>
+              <audio controls src={audioUrl} className="w-full" />
+            </div>
+          )}
           <div className="flex gap-2">
             <Button variant="outline" size="sm" className="flex-1" data-testid="button-rewind">
               ⏪ Rewind 10s
@@ -212,12 +223,12 @@ export default function IncidentDetails() {
         </Card>
 
         {/* Right: Info */}
-        <Card className="p-6">
+        <Card className="p-6 flex flex-col h-full">
           <h2 className="text-lg font-semibold mb-4">Incident Information</h2>
-          <div className="space-y-4">
+          <div className="space-y-4 flex-1">
             <div className="flex justify-between py-2 border-b">
               <span className="text-muted-foreground">Type</span>
-              <span className="font-medium capitalize" data-testid="text-incident-type">{inc.type}</span>
+              <span className="font-medium capitalize" data-testid="text-incident-type">{inc.type.replace(/_/g, " ")}</span>
             </div>
             <div className="flex justify-between py-2 border-b">
               <span className="text-muted-foreground">Camera</span>
@@ -228,6 +239,14 @@ export default function IncidentDetails() {
                 </Badge>
               </div>
             </div>
+            {modality !== "video" && (
+              <div className="flex justify-between py-2 border-b">
+                <span className="text-muted-foreground">Modality</span>
+                <Badge variant="default" className={modality === "fusion" ? "bg-purple-100 text-purple-800 border-purple-200" : "bg-blue-50 text-blue-700 border-blue-200"}>
+                  {modality === "fusion" ? "Audio-Video Fusion" : "Audio Only"}
+                </Badge>
+              </div>
+            )}
             <div className="flex justify-between py-2 border-b">
               <span className="text-muted-foreground">Severity</span>
               <span className={`font-medium ${inc.severity >= 4 ? "text-red-600" : ""}`}>
@@ -255,6 +274,43 @@ export default function IncidentDetails() {
                   <span className="font-medium capitalize">{String(recognizedEntity.type ?? recognizedEntity.kind ?? "unknown")}</span>
                 </div>
               </>
+            )}
+            {fusion && (
+              <div className="py-2 border-b space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Fusion Reason</span>
+                  <span className="font-medium text-right ml-4 text-sm">{fusion.reason}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Audio Event</span>
+                  <span className="font-medium capitalize text-blue-700">{audioEv?.label?.replace(/_/g, " ") ?? "Unknown"}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Video Event</span>
+                  <span className="font-medium capitalize text-emerald-700">{videoEv?.label?.replace(/_/g, " ") ?? "Unknown"}</span>
+                </div>
+              </div>
+            )}
+            {(det?.shadow_score !== undefined || det?.uncertainty !== undefined) && (
+              <div className="py-2 border-b space-y-2">
+                <span className="text-muted-foreground block mb-1">AI Telemetry</span>
+                <div className="grid grid-cols-2 gap-4 bg-muted/20 p-3 rounded-md text-sm border">
+                  {det?.shadow_score !== undefined && (
+                    <div>
+                      <span className="text-muted-foreground block text-xs">Learned Shadow Score</span>
+                      <span className="font-mono">{Number(det.shadow_score).toFixed(3)}</span>
+                    </div>
+                  )}
+                  {det?.uncertainty !== undefined && (
+                    <div>
+                      <span className="text-muted-foreground block text-xs">Audio Uncertainty</span>
+                      <span className={`font-mono ${Number(det.uncertainty) > 0.6 ? "text-amber-600 font-medium" : ""}`}>
+                        {Number(det.uncertainty).toFixed(3)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
             {inc.ended_at && (
               <div className="flex justify-between py-2 border-b">

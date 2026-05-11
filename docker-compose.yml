@@ -24,6 +24,7 @@ services:
   # ── Redis for Django Channels ────────────────────────────────
   redis:
     image: redis:7-alpine
+    container_name: redis-FqgF
     ports:
       - "6379:6379"
     volumes:
@@ -163,6 +164,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
+      - ./services/ai/models:/app/models:ro
       - ai-evidence:/app/evidence
       - ai-data:/app/data
     environment:
@@ -185,6 +187,10 @@ services:
       - AI_STAGING_DIR=/app/data/staging_uploads
       - AI_ENROLL_IMAGE_DIR=/app/data/enroll_images
       - AI_CORS_ALLOWED_ORIGINS=${AI_CORS_ALLOWED_ORIGINS:-*}
+      - AI_BEATS_MODEL_PATH=${AI_BEATS_MODEL_PATH:-/app/models/audio/beats/BEATs_iter3_plus_AS2M_finetuned_cpt2.pt}
+      - AI_AUDIO_ENABLED=${AI_AUDIO_ENABLED:-true}
+      - AI_AUDIO_SAMPLE_RATE=${AI_AUDIO_SAMPLE_RATE:-16000}
+      - AI_LEARNED_FUSION_MODE=${AI_LEARNED_FUSION_MODE:-shadow}
     depends_on:
       redis:
         condition: service_healthy

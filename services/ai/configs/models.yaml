@@ -169,8 +169,67 @@ models:
     weights: "models/yolov8n.pt"
     conf: 0.25
     classes: [0]
+  # ── AUDIO ANOMALY: BEATs (Microsoft) — PR-03 ──────────────────────────────
+  # SOTA audio event detection using BEATs_iter3+ AS2M fine-tuned checkpoint.
+  # Default: disabled. Enable per-camera via modality_mode: video_audio | audio_only.
+  # Auto-download: doctor.py fetches source files + checkpoint on first startup
+  #                when enabled=true (see AI_BEATS_HF_REPO_ID env var to override).
+  audio_anomaly:
+    enabled: false                  # set true to activate; doctor.py will auto-fetch assets
+    backend: beats
+    device: auto                    # auto | cuda | cpu
+    fp16: true                      # FP16 on CUDA only (safe fallback to FP32)
+    model_path: "models/audio/beats/BEATs_iter3_plus_AS2M_finetuned_cpt2.pt"
+    hf_repo_id: "agkphysics/AudioSet-BEATs"
+    hf_filename: "BEATs_iter3_plus_AS2M_finetuned_cpt2.pt"
+    ensemble_model_paths: []        # optional: list additional .pt paths for ensemble
+    sample_rate: 16000
+    chunk_s: 1.0                    # chunk duration fed to BEATs
+    hop_s: 0.5                      # hop between chunks (< chunk_s → overlap)
+    top_k: 10                       # top-K AudioSet labels to map
+    min_raw_score: 0.15             # discard predictions below this before mapping
+    min_canonical_score: 0.50       # canonical label must exceed this to be considered
+    alert_labels:                   # canonical_label: alert_threshold
+      audio_scream: 0.70
+      audio_shout: 0.75
+      audio_gunshot: 0.80
+      audio_explosion: 0.80
+      audio_glass_break: 0.65
+      audio_siren: 0.75
+      audio_alarm: 0.70
+      audio_vehicle_crash: 0.75
+    smoothing:
+      enabled: true
+      window_s: 3.0                 # temporal smoothing window in seconds
+      method: max_then_ema          # max over window, then EMA
+      ema_alpha: 0.45
 
-# GPU runtime budgets (spec addendum §2)
+  # ── MULTIMODAL FUSION: audio + video — PR-04 ───────────────────────────────
+  # Deterministic rule-based fusion of audio and video Observations.
+  # Added here for completeness; implemented in PR-04.
+  video_audio_fusion:
+    enabled: false                  # activated in PR-04
+    window_s: 10.0                  # temporal window to correlate audio + video events
+    audio_weight: 0.45
+    video_weight: 0.55
+    synergy_bonus_confirmed: 0.12   # bonus when both modalities agree
+    conflict_penalty: 0.10          # penalty when modalities conflict
+    fused_alert_threshold: 0.72
+    high_severity_threshold: 0.85
+    allow_audio_only_high_risk: true   # emit alert for gunshot/explosion even without video
+    allow_video_only_passthrough: true # video alerts still pass when audio is absent
+    uncertainty_threshold: 0.6         # Phase 2: max allowed uncertainty for audio
+    normality_ema_alpha: 0.05          # Phase 2: EMA alpha for background noise normality
+    learned_fusion_mode: shadow        # Phase 2: off | shadow | active
+    learned_fusion_checkpoint: ""      # Phase 2: optional path to .pt file
+    cooldown_s:
+      audio_scream_person: 30
+      gunshot_audio_only: 60
+      explosion_audio_only: 60
+      glass_break_intrusion: 60
+      alarm_fire: 60
+      generic_multimodal: 30
+
 runtime:
   search_paths:
     - "./models"        # all weights live here

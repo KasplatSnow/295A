@@ -144,6 +144,25 @@ class Camera(TimeStamped):
         default=True,
         help_text="Enable identity matching lane for this camera",
     )
+    audio_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable audio anomaly detection (requires camera with microphone)",
+    )
+    # Phase 2: Multimodal Fusion Telemetry & Gating
+    uncertainty_threshold = models.FloatField(
+        default=0.6,
+        help_text="Threshold above which audio uncertainty prevents synergy/standalone alerts",
+    )
+    normality_ema_alpha = models.FloatField(
+        default=0.05,
+        help_text="Smoothing factor for the background noise EMA baseline",
+    )
+    learned_fusion_mode = models.CharField(
+        max_length=16,
+        choices=[("off", "Off"), ("shadow", "Shadow"), ("active", "Active")],
+        default="off",
+        help_text="Mode for the AI Learned Fusion head",
+    )
     source_kind = models.CharField(max_length=50, blank=True, default="", help_text="Derived or explicit source kind (e.g., rtsp, mjpeg, hls)")
     source_fingerprint = models.CharField(max_length=256, blank=True, default="", help_text="Optional TLS fingerprint for HTTPS IP cameras")
     url_hash = models.CharField(max_length=16, blank=True, default="", db_index=True, help_text="16-char hex hash of normalized URL for deduplication")
@@ -251,6 +270,11 @@ class Incident(TimeStamped):
         STRANGER = "stranger", "Stranger"
         FIRE = "fire", "Fire"
         INTRUSION = "intrusion", "Intrusion"
+        AUDIO_ANOMALY = "audio_anomaly", "Audio Anomaly"
+        WEAPON = "weapon", "Weapon"
+        FALL = "fall", "Fall"
+        VIOLENCE = "violence", "Violence"
+        ACCIDENT = "accident", "Accident"
         OTHER = "other", "Other"
 
     class Status(models.TextChoices):

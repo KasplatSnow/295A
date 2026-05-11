@@ -534,8 +534,8 @@ export default function Settings() {
                 </div>
                 <div className="flex items-center justify-between">
                   <div>
-                    <Label htmlFor="audio-detection" className="text-base">Enable Audio Detection</Label>
-                    <p className="text-sm text-muted-foreground">Detect anomalies using audio analysis</p>
+                    <Label htmlFor="audio-detection" className="text-base">Audio anomaly alerts</Label>
+                    <p className="text-sm text-muted-foreground">Receive alerts for screams, gunshots, glass break, alarms, and other suspicious sounds.</p>
                   </div>
                   <Switch
                     id="audio-detection"

@@ -107,6 +107,8 @@ export default function Incidents() {
               <SelectItem value="intrusion">Intrusion</SelectItem>
               <SelectItem value="robbery">Robbery</SelectItem>
               <SelectItem value="stranger">Stranger</SelectItem>
+              <SelectItem value="audio_anomaly">Audio Anomaly</SelectItem>
+              <SelectItem value="multimodal_anomaly">Multimodal Anomaly</SelectItem>
               <SelectItem value="other">Other</SelectItem>
             </SelectContent>
           </Select>

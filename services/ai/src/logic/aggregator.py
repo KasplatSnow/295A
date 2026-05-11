@@ -66,6 +66,8 @@ LANE_TO_ALERT_TYPE = {
     "anyanomaly": "UNKNOWN_SEVERE_ANOMALY",
     "anomalyclip": "UNKNOWN_SEVERE_ANOMALY",
     "temporal_verifier": None,     # never fires directly
+    # PR-04: audio-visual fusion lane
+    "audio_video_fusion": "AUDIO_ANOMALY",
 }
 
 # Label → alert type for dynamic lanes
@@ -86,6 +88,23 @@ LABEL_TO_ALERT_TYPE = {
     "crash": "ACCIDENT",
     "unknown_anomaly": "UNKNOWN_SEVERE_ANOMALY",
     "anomaly": "UNKNOWN_SEVERE_ANOMALY",
+    # PR-04: audio anomaly and fused labels
+    "audio_anomaly": "AUDIO_ANOMALY",
+    "audio_scream_person_present": "AUDIO_ANOMALY",
+    "audio_scream_intrusion": "AUDIO_ANOMALY",
+    "audio_gunshot_person_present": "AUDIO_ANOMALY",
+    "audio_gunshot_weapon_confirmed": "AUDIO_ANOMALY",
+    "audio_explosion_fire_smoke": "AUDIO_ANOMALY",
+    "audio_explosion_vehicle_crash": "AUDIO_ANOMALY",
+    "audio_glass_break_intrusion": "AUDIO_ANOMALY",
+    "audio_glass_break_person_present": "AUDIO_ANOMALY",
+    "audio_alarm_fire_confirmed": "AUDIO_ANOMALY",
+    "audio_siren_vehicle_incident": "AUDIO_ANOMALY",
+    "audio_vehicle_crash_confirmed": "AUDIO_ANOMALY",
+    "audio_shout_violence_confirmed": "AUDIO_ANOMALY",
+    "audio_shout_person_present": "AUDIO_ANOMALY",
+    "audio_gunshot_audio_only": "AUDIO_ANOMALY",
+    "audio_explosion_audio_only": "AUDIO_ANOMALY",
 }
 
 # Alert type → base severity  (VIOLENCE/FALL start MED; only SEVERE after temporal confirm)
@@ -98,6 +117,8 @@ ALERT_SEVERITY = {
     "LOITERING": "MED",
     "ACCIDENT": "SEVERE",
     "UNKNOWN_SEVERE_ANOMALY": "MED",  # was HIGH; tightened to reduce FPs
+    # PR-04: audio anomaly — HIGH base, SEVERE when fusion score ≥ high_severity_threshold
+    "AUDIO_ANOMALY": "HIGH",
 }
 
 

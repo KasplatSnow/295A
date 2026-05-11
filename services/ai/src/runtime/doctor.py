@@ -44,6 +44,24 @@ _RTDETRV2_WEIGHTS = {
     "rtdetrv2_r101vd_6x_coco_from_paddle.pth":   "https://github.com/lyuwenyu/storage/releases/download/v0.1/rtdetrv2_r101vd_6x_coco_from_paddle.pth",
 }
 
+# BEATs source files — downloaded from official GitHub raw URLs at startup.
+# These are tiny Python files (~50 KB total); downloading them on first run
+# is far more reliable than asking cloud operators to copy them manually.
+_BEATS_BASE_URL = "https://raw.githubusercontent.com/microsoft/unilm/master/beats"
+_BEATS_SOURCE_FILES = {
+    "BEATs.py":      f"{_BEATS_BASE_URL}/BEATs.py",
+    "Tokenizers.py": f"{_BEATS_BASE_URL}/Tokenizers.py",
+    "backbone.py":   f"{_BEATS_BASE_URL}/backbone.py",
+    "modules.py":    f"{_BEATS_BASE_URL}/modules.py",
+    "quantizer.py":  f"{_BEATS_BASE_URL}/quantizer.py",
+}
+
+# Default HuggingFace source for BEATs checkpoint.
+# Override via env vars AI_BEATS_HF_REPO_ID / AI_BEATS_HF_FILENAME.
+_BEATS_DEFAULT_HF_REPO   = os.environ.get("AI_BEATS_HF_REPO_ID",   "agkphysics/AudioSet-BEATs")
+_BEATS_DEFAULT_HF_FILE   = os.environ.get("AI_BEATS_HF_FILENAME",   "BEATs_iter3_plus_AS2M_finetuned_cpt2.pt")
+_BEATS_DIRECT_URL        = os.environ.get("AI_BEATS_DOWNLOAD_URL", "")
+
 # Project root = ai_module/
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -302,6 +320,118 @@ class Doctor:
             return None
 
     # ==================================================================
+    # D-ext) BEATs asset provisioning
+    # ==================================================================
+    @classmethod
+    def _ensure_beats_assets(cls, audio_cfg: Dict[str, Any], report: DoctorReport) -> Optional[str]:
+        """
+        Ensure BEATs.py/Tokenizers.py source files and the checkpoint are
+        present.  Downloads them automatically on first run.
+
+        Returns the resolved checkpoint path (str) or None if unavailable.
+        """
+        beats_src_dir = PROJECT_ROOT / "third_party" / "beats"
+
+        # ── 1. Source files (BEATs.py + Tokenizers.py) ───────────────
+        missing_src = [
+            fname for fname in ("BEATs.py", "Tokenizers.py")
+            if not (beats_src_dir / fname).exists()
+        ]
+        if missing_src:
+            logger.info("BEATs source files missing — downloading from GitHub …")
+            beats_src_dir.mkdir(parents=True, exist_ok=True)
+            for fname in missing_src:
+                url = _BEATS_SOURCE_FILES[fname]
+                dest = beats_src_dir / fname
+                try:
+                    import urllib.request
+                    req = urllib.request.Request(
+                        url, headers={"User-Agent": "VigilZone/1.0"}
+                    )
+                    with urllib.request.urlopen(req, timeout=60) as resp, \
+                            open(dest, "wb") as fh:
+                        fh.write(resp.read())
+                    logger.info(f"Downloaded BEATs source: {fname} → {dest}")
+                    report.auto_fetched.append(f"beats-src:{fname}")
+                except Exception as exc:
+                    logger.warning(f"Failed to download BEATs source {fname}: {exc}")
+                    report.warnings.append(
+                        f"BEATs source {fname} unavailable; audio lane will be disabled."
+                    )
+
+        # ── 2. Checkpoint file ────────────────────────────────────────
+        raw_model_path = audio_cfg.get("model_path", "")
+        if not raw_model_path:
+            raw_model_path = (
+                f"models/audio/beats/{_BEATS_DEFAULT_HF_FILE}"
+            )
+
+        checkpoint_path = Path(raw_model_path)
+        if not checkpoint_path.is_absolute():
+            checkpoint_path = PROJECT_ROOT / raw_model_path
+        checkpoint_path = checkpoint_path.resolve()
+
+        if checkpoint_path.exists():
+            logger.info(f"BEATs checkpoint found: {checkpoint_path}")
+            audio_cfg["model_path"] = str(checkpoint_path)
+            report.resolved_paths["models.audio_anomaly.model_path"] = str(checkpoint_path)
+            return str(checkpoint_path)
+
+        # Not present — try to download
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info("BEATs checkpoint not found — attempting auto-download …")
+
+        # Strategy A: direct URL from env var
+        if _BEATS_DIRECT_URL:
+            logger.info(f"Using AI_BEATS_DOWNLOAD_URL: {_BEATS_DIRECT_URL}")
+            fetched = None
+            try:
+                import urllib.request
+                tmp = checkpoint_path.with_suffix(".tmp")
+                req = urllib.request.Request(
+                    _BEATS_DIRECT_URL, headers={"User-Agent": "VigilZone/1.0"}
+                )
+                with urllib.request.urlopen(req, timeout=600) as resp, \
+                        open(tmp, "wb") as fh:
+                    fh.write(resp.read())
+                tmp.rename(checkpoint_path)
+                fetched = str(checkpoint_path)
+                logger.info(f"BEATs checkpoint downloaded via direct URL → {checkpoint_path}")
+                report.auto_fetched.append(f"beats-checkpoint:{checkpoint_path.name}")
+            except Exception as exc:
+                logger.warning(f"Direct URL download failed: {exc}")
+                if tmp.exists():
+                    tmp.unlink()
+            if fetched:
+                audio_cfg["model_path"] = fetched
+                report.resolved_paths["models.audio_anomaly.model_path"] = fetched
+                return fetched
+
+        # Strategy B: HuggingFace Hub (uses existing _try_hf_fetch)
+        hf_repo = audio_cfg.get("hf_repo_id", _BEATS_DEFAULT_HF_REPO)
+        hf_file = audio_cfg.get("hf_filename",  _BEATS_DEFAULT_HF_FILE)
+        fetched = cls._try_hf_fetch(
+            hf_repo, hf_file, report,
+            local_rename=checkpoint_path.name,
+        )
+        if fetched:
+            audio_cfg["model_path"] = fetched
+            report.resolved_paths["models.audio_anomaly.model_path"] = fetched
+            return fetched
+
+        # All strategies exhausted
+        logger.warning(
+            "BEATs checkpoint could not be downloaded automatically. "
+            "The audio_anomaly lane will be disabled at runtime. "
+            "To fix: set AI_BEATS_DOWNLOAD_URL or run: "
+            "python scripts/download_beats.py"
+        )
+        report.warnings.append(
+            "BEATs checkpoint unavailable — audio_anomaly lane disabled."
+        )
+        return None
+
+    # ==================================================================
     # D) Walk config and resolve each model entry
     # ==================================================================
     @classmethod
@@ -421,6 +551,11 @@ class Doctor:
                     ))
             else:
                 aa["repo_dir"] = str(repo_dir_abs)
+
+        # ── BEATs (audio_anomaly lane) ───────────────────────────────────
+        audio_cfg = models.get("audio_anomaly", {})
+        if audio_cfg.get("enabled", False):
+            cls._ensure_beats_assets(audio_cfg, report)
 
     # ==================================================================
     # PUBLIC: run_all

@@ -303,13 +303,35 @@ class NotificationService:
         incident: Incident
     ) -> dict:
         """Build notification payload from an incident."""
+        NOTIFICATION_TEMPLATES = {
+            "audio_anomaly": "Audio anomaly detected",
+            "scream": "Scream detected",
+            "gunshot": "Possible gunshot detected",
+            "glass_break": "Glass break detected",
+            "explosion": "Possible explosion detected",
+            "multimodal_anomaly": "Audio-video anomaly confirmed",
+        }
+
         severity_labels = {1: "Low", 2: "Medium-Low", 3: "Medium", 4: "High", 5: "Critical"}
         
         severity_level = severity_level_for_value(incident.severity)
+        
+        # Check if the incident type or an underlying label matches our specific templates
+        details = incident.details or {}
+        modality = details.get("modality", "video")
+        modalities = details.get("modalities", [])
+        
+        # Determine the best template key. If fusion, check if there's a specific audio reason, else multimodal
+        template_key = incident.type
+        
+        base_title = NOTIFICATION_TEMPLATES.get(template_key)
+        if not base_title:
+            base_title = f"{incident.get_type_display()} Detected"
+            
         notification = {
             "type": "notification",
             "notification_type": "incident",
-            "title": f"🚨 {incident.get_type_display()} Detected",
+            "title": f"🚨 {base_title}",
             "message": f"{severity_labels.get(incident.severity, 'Unknown')} severity incident at {incident.camera.name}",
             "data": {
                 "incident_id": str(incident.id),
@@ -321,6 +343,8 @@ class NotificationService:
                 "camera_name": incident.camera.name,
                 "stream_path": getattr(incident.camera, 'stream_path', None),
                 "started_at": incident.started_at.isoformat() if incident.started_at else None,
+                "modality": modality,
+                "modalities": modalities,
                 "details": incident.details,
             },
             "severity": incident.severity,
@@ -361,6 +385,22 @@ class NotificationService:
             for member in members:
                 if member.user.profile.allows_instant_notification(incident.severity):
                     target_user_ids.append(str(member.user.id))
+
+        # Filter by modality preference
+        details = incident.details or {}
+        modality = details.get("modality", "video")
+        
+        user_audio_pref = {}
+        if modality in ["audio", "fusion"] and target_user_ids:
+            members = Membership.objects.filter(
+                tenant=incident.tenant, 
+                user_id__in=target_user_ids
+            ).select_related("user", "user__profile")
+            user_audio_pref = {str(m.user.id): m.user.profile.audio_detection for m in members}
+            
+            if modality == "audio":
+                # Only users with audio_detection=True
+                target_user_ids = [uid for uid in target_user_ids if user_audio_pref.get(uid, False)]
         
         alerts_to_create = []
         user_to_alert_map = {}
@@ -383,6 +423,18 @@ class NotificationService:
                 if user_id_str in existing_alert_map:
                     user_to_alert_map[user_id_str] = existing_alert_map[user_id_str]
                     continue
+                    
+                user_payload_data = notification.get("data", {}).copy()
+                if modality == "fusion" and not user_audio_pref.get(user_id_str, True):
+                    # Strip audio details for users who don't want audio detection
+                    if "details" in user_payload_data and isinstance(user_payload_data["details"], dict):
+                        user_details = user_payload_data["details"].copy()
+                        user_details.pop("audio", None)
+                        if "evidence" in user_details and isinstance(user_details["evidence"], dict):
+                            user_evidence = user_details["evidence"].copy()
+                            user_evidence.pop("audio_url", None)
+                            user_details["evidence"] = user_evidence
+                        user_payload_data["details"] = user_details
 
                 alert_id = uuid.uuid4()
                 alert = Alert(
@@ -393,7 +445,7 @@ class NotificationService:
                     payload={
                         "title": notification["title"],
                         "message": notification["message"],
-                        "data": notification.get("data", {}),
+                        "data": user_payload_data,
                         "alert_id": str(alert_id),
                         "user_id": user_id_str,
                     }
